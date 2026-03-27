@@ -1,3 +1,9 @@
+"""
+Ключи для мистраля класть по пути:
+~{project_root}/.credentials/mistral_api_keys
+Каждый ключ с новой строки, без лишних пробелов.
+"""
+
 from __future__ import annotations
 
 import concurrent.futures
