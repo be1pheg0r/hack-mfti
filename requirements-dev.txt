@@ -1,2 +1,8 @@
 optuna
 pytest
+pandas
+scikit-learn
+jupyter
+matplotlib
+seaborn
+umap-learn

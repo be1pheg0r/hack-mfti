@@ -261,6 +261,11 @@ class SentenceTransformerEncoder(BaseEncoder):
 
         return embeddings
 
+def cos_sim(vec_a: Any, vec_b: Any) -> Any:
+    """Вычисляет косинусное сходство между двумя векторами."""
+    func = __import__("sentence_transformers.util", fromlist=["cos_sim"])
+    cos_sim_func = getattr(func, "cos_sim")
+    return cos_sim_func(vec_a, vec_b)
 
 if __name__ == "__main__":
     config = EncoderConfig.from_default_yaml()
@@ -268,7 +273,5 @@ if __name__ == "__main__":
     sample_texts = ["Обезьяна обожралась бананов и сдохла", "Обезьяна обожралась бананов и умерла навсегда"]
     embeddings = encoder.encode(sample_texts)
 
-    similarity = sum(a * b for a, b in zip(embeddings[0], embeddings[1])) / (
-        (sum(a * a for a in embeddings[0]) ** 0.5) * (sum(b * b for b in embeddings[1]) ** 0.5)
-    )
-    print(f"Cosine similarity: {similarity:.4f}")
+    similarity = cos_sim(embeddings[0], embeddings[1])
+    print(f"Косинусное сходство между текстами: {similarity.item():.4f}")
