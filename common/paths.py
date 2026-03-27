@@ -1,18 +1,20 @@
+from functools import wraps
 from pathlib import Path
-import os
 from typing import *
 
 ANCHOR = "anch"
+P = ParamSpec("P")
 
 
-def fixdir(function: Callable[..., Path]) -> Callable[..., Path]:
+def fixdir(function: Callable[P, Path]) -> Callable[P, Path]:
     """
     Декоратор для создания директории, если она не существует.
     :param function: Callable: Функция, возвращающая путь к директории.
     :return: Callable: Обернутая функция.
     """
 
-    def wrapper(*args, **kwargs) -> Path:
+    @wraps(function)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Path:
         dir_path = function(*args, **kwargs)
         dir_path.mkdir(parents=True, exist_ok=True)
         return dir_path
@@ -20,26 +22,28 @@ def fixdir(function: Callable[..., Path]) -> Callable[..., Path]:
     return wrapper
 
 
-def avito(function: Callable[..., Path]) -> Callable[..., Path]:
+def avito(function: Callable[P, Path]) -> Callable[P, Path]:
     """
     Декоратор для добавления префикса "avito" к пути.
     :param function: Callable: Функция, возвращающая путь.
     :return: Callable: Обернутая функция.
     """
 
-    def wrapper(*args, **kwargs) -> Path:
+    @wraps(function)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Path:
         return get_project_root() / "avito" / function(*args, **kwargs)
 
     return wrapper
 
-def sber(function: Callable[..., Path]) -> Callable[..., Path]:
+def sber(function: Callable[P, Path]) -> Callable[P, Path]:
     """
     Декоратор для добавления префикса "sber" к пути.
     :param function: Callable: Функция, возвращающая путь.
     :return: Callable: Обернутая функция.
     """
 
-    def wrapper(*args, **kwargs) -> Path:
+    @wraps(function)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Path:
         return get_project_root() / "sber" / function(*args, **kwargs)
 
     return wrapper
@@ -50,8 +54,8 @@ def get_project_root() -> Path:
     Корневой каталог проекта.
     :return: Path: Путь к корневому каталогу проекта.
     """
-    current_path = Path(__file__).resolve().parent
-    while ANCHOR not in [Path(p).name for p in os.listdir(current_path)]:
+    current_path: Path = Path(__file__).resolve().parent
+    while not (current_path / ANCHOR).exists():
         if current_path.parent == current_path:
             raise FileNotFoundError(f"Файл '{ANCHOR}' не найден в корневом каталоге проекта.")
         current_path = current_path.parent
@@ -65,6 +69,7 @@ def get_data_dpath() -> Path:
     :return: Path: Путь к каталогу данных проекта.
     """
     return get_project_root() / "data"
+
 
 @fixdir
 @avito
@@ -85,6 +90,7 @@ def get_sber_dpath() -> Path:
     """
     return Path()
 
+
 @fixdir
 @avito
 def get_avito_data_dpath() -> Path:
@@ -104,6 +110,7 @@ def get_sber_data_dpath() -> Path:
     """
     return Path() / "data"
 
+
 @fixdir
 @avito
 def get_avito_configs_dpath() -> Path:
@@ -121,6 +128,7 @@ def get_sber_configs_dpath() -> Path:
     :return: Path: Путь к каталогу конфигурационных файлов для сбер кейса.
     """
     return Path() / "configs"
+
 
 @fixdir
 @avito
@@ -140,6 +148,7 @@ def get_sber_cache_dpath() -> Path:
     """
     return Path() / ".cache"
 
+
 @fixdir
 def get_avito_tests_dpath() -> Path:
     """
@@ -157,3 +166,17 @@ def get_sber_tests_dpath() -> Path:
     return get_sber_dpath() / "tests"
 
 
+@fixdir
+def get_secrets_dpath() -> Path:
+    """
+    Каталог для хранения секретов проекта.
+    :return: Path: Путь к каталогу секретов проекта.
+    """
+    return get_project_root() / ".credentials"
+
+def get_mistral_api_keys_fpath() -> Path:
+    """
+    Путь к файлу с API-ключами для Mistral.
+    :return: Path: Путь к файлу с API-ключами для Mistral.
+    """
+    return get_secrets_dpath() / "mistral_api_keys"
