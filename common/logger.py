@@ -1,11 +1,19 @@
+from __future__ import annotations
+
 import logging
 import time
+from dataclasses import dataclass
 from functools import wraps
+from typing import *
+
 from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-level_map = {
+P = ParamSpec("P")
+T = TypeVar("T")
+
+LEVEL_MAP: dict[str, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
     "WARNING": logging.WARNING,
@@ -14,10 +22,39 @@ level_map = {
 }
 
 
-class ColoredFormatter(logging.Formatter):
-    """Форматер логирования с цветовым выделением по уровню логирования."""
+@dataclass(frozen=True, slots=True)
+class LoggerConfig:
+    """Конфигурация логгера проекта.
 
-    LEVEL_COLORS = {
+    Attributes:
+        name: Название логгера.
+        level: Уровень логирования в строковом виде.
+        log_format: Формат строки лога.
+        propagate: Флаг проброса логов к родительскому логгеру.
+    """
+
+    name: str
+    level: str = "INFO"
+    prefix: str = ""
+    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    propagate: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectLoggerRegistry:
+    """Реестр преднастроенных логгеров проекта.
+
+    Attributes:
+        mistral_call: Логгер для безопасного вызова функций в common.mistral.
+    """
+
+    mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG")
+
+
+class ColoredFormatter(logging.Formatter):
+    """Форматтер с цветовым выделением по уровню логирования."""
+
+    LEVEL_COLORS: dict[int, str] = {
         logging.DEBUG: Fore.BLUE,
         logging.INFO: Fore.GREEN,
         logging.WARNING: Fore.YELLOW,
@@ -25,62 +62,110 @@ class ColoredFormatter(logging.Formatter):
         logging.CRITICAL: Fore.RED + Style.BRIGHT,
     }
 
-    def format(self, record):
-        """
-        Форматирует запись логирования с цветовым выделением.
+    def __init__(self, fmt: str, prefix: str = "") -> None:
+        """Инициализирует форматтер.
 
-        :param record: Запись логирования.
-        :return: Отформатированная строка логирования.
+        Args:
+            fmt: Шаблон форматирования лога.
+            prefix: Текст, который добавляется перед сообщением.
         """
-        log_color = self.LEVEL_COLORS.get(record.levelno, "")
-        reset_color = Style.RESET_ALL
-        original_msg = record.msg
-        record.msg = f"{log_color}{record.msg}{reset_color}"
-        result = super().format(record)
+        super().__init__(fmt)
+        self._prefix: str = prefix
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Форматирует запись логирования с цветовым выделением.
+
+        Args:
+            record: Запись логирования.
+
+        Returns:
+            Строка лога с ANSI-цветом для уровня логирования.
+        """
+        log_color: str = self.LEVEL_COLORS.get(record.levelno, "")
+        reset_color: str = Style.RESET_ALL
+        original_msg: Any = record.msg
+        prefixed_message: str = f"{self._prefix}{record.msg}" if self._prefix else str(record.msg)
+        record.msg = f"{log_color}{prefixed_message}{reset_color}"
+        result: str = super().format(record)
         record.msg = original_msg
         return result
 
 
-def setup_logger(name: str, level: str = "INFO") -> logging.Logger:
-    """
-    Инициализирует логгер с цветным форматированием.
+LOGGERS: ProjectLoggerRegistry = ProjectLoggerRegistry()
 
-    :param name: Название логгера.
-    :param level: Уровень логирования (по умолчанию INFO).
-    :return: Настроенный объект логгера.
-    """
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.setLevel(level_map.get(level.upper(), logging.INFO))
 
-    handler = logging.StreamHandler()
-    handler.setLevel(level_map.get(level.upper(), logging.INFO))
-    formatter = ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+def setup_logger(config: LoggerConfig) -> logging.Logger:
+    """Создает или возвращает настроенный логгер.
+
+    Args:
+        config: Конфигурация логгера.
+
+    Returns:
+        Настроенный объект логгера.
+    """
+    logger: logging.Logger = logging.getLogger(config.name)
+    logger.setLevel(LEVEL_MAP.get(config.level.upper(), logging.INFO))
+    logger.propagate = config.propagate
+    formatter: ColoredFormatter = ColoredFormatter(config.log_format, prefix=config.prefix)
+
+    if logger.handlers:
+        for existing_handler in logger.handlers:
+            existing_handler.setLevel(LEVEL_MAP.get(config.level.upper(), logging.INFO))
+            existing_handler.setFormatter(formatter)
+        return logger
+
+    handler: logging.StreamHandler = logging.StreamHandler()
+    handler.setLevel(LEVEL_MAP.get(config.level.upper(), logging.INFO))
     handler.setFormatter(formatter)
-
-    root_logger.addHandler(handler)
-
-    return logging.getLogger(name)
+    logger.addHandler(handler)
+    return logger
 
 
-def log_after_invoke(logger: logging.Logger):
+def get_project_logger(config_name: str) -> logging.Logger:
+    """Возвращает логгер из реестра проектных логгеров.
+
+    Args:
+        config_name: Имя поля из реестра LOGGERS.
+
+    Returns:
+        Настроенный логгер.
+
+    Raises:
+        ValueError: Если имя логгера не найдено в реестре.
     """
-    Декоратор для логирования времени выполнения функции и обработки исключений.
+    if not hasattr(LOGGERS, config_name):
+        raise ValueError(f"Логгер с именем '{config_name}' не найден в реестре.")
 
-    :param logger: Объект логгера для записи информации.
-    :return: Декоратор функции.
+    config: LoggerConfig = getattr(LOGGERS, config_name)
+    return setup_logger(config)
+
+
+MISTRAL_LOGGER: logging.Logger = get_project_logger("mistral_call")
+
+
+def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    """Логирует время выполнения функции и ожидаемые ошибки.
+
+    Args:
+        logger: Экземпляр логгера.
+
+    Returns:
+        Декоратор для оборачиваемой функции.
     """
-    def decorator(func):
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             try:
-                t_start = time.time()
-                result = func(*args, **kwargs)
-                t_end = time.time()
-                logger.debug(f"{func.__name__} выполнена за {t_end - t_start:.2f} секунд.")
+                start_time: float = time.time()
+                result: T = func(*args, **kwargs)
+                duration: float = time.time() - start_time
+                logger.debug(f"{func.__name__} выполнена за {duration:.2f} секунд.")
                 return result
-            except Exception as e:
-                logger.error(f"Ошибка при выполнении {func.__name__}: {e}")
+            except Exception as error:
+                logger.error(f"Ошибка при выполнении {func.__name__}: {error}")
                 raise
+
         return wrapper
+
     return decorator
