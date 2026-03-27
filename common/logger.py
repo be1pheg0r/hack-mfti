@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 from functools import wraps
 from typing import *
 
 from colorama import Fore, Style, init
+from pydantic import BaseModel, ConfigDict, field_validator
 
 init(autoreset=True)
 
@@ -22,16 +22,18 @@ LEVEL_MAP: dict[str, int] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class LoggerConfig:
+class LoggerConfig(BaseModel):
     """Конфигурация логгера проекта.
 
     Attributes:
         name: Название логгера.
         level: Уровень логирования в строковом виде.
+        prefix: Текстовый префикс перед сообщением логгера.
         log_format: Формат строки лога.
         propagate: Флаг проброса логов к родительскому логгеру.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     level: str = "INFO"
@@ -39,16 +41,26 @@ class LoggerConfig:
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     propagate: bool = False
 
+    @field_validator("level")
+    @classmethod
+    def validate_level(cls, value: str) -> str:
+        """Проверяет, что уровень логирования поддерживается."""
+        normalized_level: str = value.upper().strip()
+        if normalized_level not in LEVEL_MAP:
+            raise ValueError(f"Неподдерживаемый уровень логирования: {value}")
+        return normalized_level
 
-@dataclass(frozen=True, slots=True)
-class ProjectLoggerRegistry:
+
+class ProjectLoggerRegistry(BaseModel):
     """Реестр преднастроенных логгеров проекта.
 
     Attributes:
         mistral_call: Логгер для безопасного вызова функций в common.mistral.
     """
 
-    mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG")
+    model_config = ConfigDict(frozen=True)
+
+    mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG", prefix="[MISTRAL 🇫🇷] ")
 
 
 class ColoredFormatter(logging.Formatter):

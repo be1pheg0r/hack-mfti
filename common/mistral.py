@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import importlib
-from dataclasses import dataclass, field
 from typing import *
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.logger import MISTRAL_LOGGER
 from common.paths import get_mistral_api_keys_fpath
@@ -56,8 +57,7 @@ def _resolve_api_keys(config: MistralCallConfig) -> list[str]:
 
     return merged_keys
 
-@dataclass(frozen=True, slots=True)
-class MistralCallConfig:
+class MistralCallConfig(BaseModel):
     """Конфигурация вызова Mistral API.
 
     Attributes:
@@ -68,11 +68,50 @@ class MistralCallConfig:
         max_attempts_per_call: Число попыток на один вызов модели.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     models_list: list[str]
     default_api_key: str = "void"
-    api_keys: list[str] = field(default_factory=list)
+    api_keys: list[str] = Field(default_factory=list)
     timeout: int = 240
     max_attempts_per_call: int = 1
+
+    @field_validator("models_list")
+    @classmethod
+    def validate_models_list(cls, value: list[str]) -> list[str]:
+        """Проверяет список моделей и удаляет пустые значения."""
+        normalized_models: list[str] = [model.strip() for model in value if model.strip()]
+        if not normalized_models:
+            raise ValueError("Список моделей не может быть пустым.")
+        return normalized_models
+
+    @field_validator("default_api_key")
+    @classmethod
+    def normalize_default_api_key(cls, value: str) -> str:
+        """Нормализует основной API-ключ."""
+        return value.strip()
+
+    @field_validator("api_keys")
+    @classmethod
+    def normalize_api_keys(cls, value: list[str]) -> list[str]:
+        """Нормализует список API-ключей без пустых значений."""
+        return [key.strip() for key in value if key.strip()]
+
+    @field_validator("timeout")
+    @classmethod
+    def validate_timeout(cls, value: int) -> int:
+        """Проверяет положительный таймаут."""
+        if value <= 0:
+            raise ValueError("Таймаут должен быть положительным.")
+        return value
+
+    @field_validator("max_attempts_per_call")
+    @classmethod
+    def validate_max_attempts(cls, value: int) -> int:
+        """Проверяет положительное количество попыток."""
+        if value <= 0:
+            raise ValueError("Количество попыток должно быть положительным.")
+        return value
 
     def keys_to_try(self) -> list[str]:
         """Возвращает список ключей для перебора."""
