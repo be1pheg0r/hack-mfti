@@ -69,7 +69,7 @@ class MistralCallConfig:
     """
 
     models_list: list[str]
-    default_api_key: str
+    default_api_key: str = "void"
     api_keys: list[str] = field(default_factory=list)
     timeout: int = 240
     max_attempts_per_call: int = 1
@@ -89,7 +89,7 @@ def _load_mistral_client_class() -> type[Any]:
         ImportError: Если пакет mistralai недоступен.
         AttributeError: Если в пакете отсутствует класс Mistral.
     """
-    module: Any = importlib.import_module("mistralai")
+    module: Any = importlib.import_module("mistralai.client")
     client_class: type[Any] = getattr(module, "Mistral")
     return client_class
 
@@ -122,7 +122,7 @@ def safe_call(
         except concurrent.futures.TimeoutError:
             logger.warning(f"safe_call: timeout на попытке {attempt}, повтор...")
         except Exception as error:
-            logger.error(f"safe_call: ошибка на попытке {attempt}: {error}", exc_info=True)
+            logger.error(f"safe_call: ошибка на попытке {attempt}: {str(error)[:20]}...", exc_info=True)
     raise RuntimeError("safe_call: превышено число попыток")
 
 
