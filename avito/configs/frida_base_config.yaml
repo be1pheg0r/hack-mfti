@@ -1,0 +1,9 @@
+local_model_path: "rubert-mini-frida"
+hub_model_name: "sergeyzh/rubert-mini-frida"
+prompt: "categorize_entailment: "
+batch_size: 32
+normalize_embeddings: true
+show_progress_bar: false
+device: null
+
+
