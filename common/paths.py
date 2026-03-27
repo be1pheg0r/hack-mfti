@@ -4,6 +4,7 @@ from typing import *
 
 ANCHOR = "anch"
 P = ParamSpec("P")
+PathLike = str | Path
 
 
 def fixdir(function: Callable[P, Path]) -> Callable[P, Path]:
@@ -180,3 +181,11 @@ def get_mistral_api_keys_fpath() -> Path:
     :return: Path: Путь к файлу с API-ключами для Mistral.
     """
     return get_secrets_dpath() / "mistral_api_keys"
+
+@fixdir
+def get_checkpoints_dpath() -> Path:
+    """
+    Каталог для хранения контрольных точек моделей.
+    :return: Path: Путь к каталогу контрольных точек моделей.
+    """
+    return get_project_root() / "checkpoints"
