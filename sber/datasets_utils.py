@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import zipfile
 from pathlib import Path
@@ -207,13 +208,13 @@ def load_rubq_dataset(
 
 
 def build_tape_data_dir(tape_name: str) -> str:
-    """Возвращает путь до подкаталога датасета внутри RussianNLP/tape.
+    """Возвращает базовый путь до датасета внутри RussianNLP/tape.
 
     Args:
         tape_name: Имя датасета, например `chegeka.raw`.
 
     Returns:
-        Относительный путь внутри репозитория датасета на Hugging Face.
+        Путь вида `dummy/raw/{dataset_name}`.
     """
     normalized_name: str = tape_name.strip()
     if not normalized_name:
@@ -223,29 +224,113 @@ def build_tape_data_dir(tape_name: str) -> str:
     return f"dummy/raw/{dataset_name}"
 
 
+def build_tape_data_files(tape_name: str) -> dict[str, str]:
+    """Формирует пути train/test jsonl внутри репозитория TAPE."""
+    data_dir: str = build_tape_data_dir(tape_name=tape_name)
+    return {
+        "train": f"{data_dir}/train.jsonl",
+        "test": f"{data_dir}/test.jsonl",
+    }
+
+
+def download_tape_data_files(
+    config: SberDatasetsConfig,
+    tape_name: str,
+    cache_dir: Path,
+) -> dict[str, str]:
+    """Скачивает train/test jsonl из Hugging Face Hub для TAPE.
+
+    Args:
+        config: Конфиг загрузки датасетов.
+        tape_name: Имя датасета, например `chegeka.raw`.
+        cache_dir: Каталог кэша Hugging Face.
+
+    Returns:
+        Словарь локальных путей к файлам train/test.
+    """
+    from huggingface_hub import hf_hub_download
+
+    repo_files: dict[str, str] = build_tape_data_files(tape_name=tape_name)
+    local_files: dict[str, str] = {}
+
+    for split_name, repo_filename in repo_files.items():
+        local_fpath: str = hf_hub_download(
+            repo_id=config.tape_repo,
+            repo_type="dataset",
+            filename=repo_filename,
+            cache_dir=str(cache_dir),
+        )
+        local_files[split_name] = local_fpath
+
+    return local_files
+
+
+def _normalize_multiq_answers(raw_value: Any) -> list[dict[str, Any]]:
+    """Нормализует поле ответов multiq к списку словарей."""
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return [item for item in raw_value if isinstance(item, dict)]
+    if isinstance(raw_value, dict):
+        return [raw_value] if raw_value else []
+    return []
+
+
+def read_jsonl_records(fpath: PathLike, tape_name: str) -> list[dict[str, Any]]:
+    """Считывает jsonl-файл в список словарей.
+
+    Args:
+        fpath: Путь к jsonl-файлу.
+        tape_name: Имя TAPE датасета для условной нормализации полей.
+
+    Returns:
+        Список записей датасета.
+    """
+    records: list[dict[str, Any]] = []
+    with open(fpath, "r", encoding="utf-8") as file:
+        for line in file:
+            payload: str = line.strip()
+            if not payload:
+                continue
+            item: Any = json.loads(payload)
+            if not isinstance(item, dict):
+                continue
+
+            if tape_name.startswith("multiq"):
+                item["bridge_answers"] = _normalize_multiq_answers(item.get("bridge_answers"))
+                item["main_answers"] = _normalize_multiq_answers(item.get("main_answers"))
+
+            records.append(item)
+    return records
+
+
 def load_tape_dataset(
     config: SberDatasetsConfig,
     tape_name: str,
     data_root: PathLike | None = None,
-) -> Any:
-    """Загружает датасет из репозитория TAPE.
+) -> list[dict[str, Any]]:
+    """Загружает train-часть датасета из RussianNLP/tape.
 
     Источник: https://huggingface.co/datasets/RussianNLP/tape
-    Путь внутри репозитория: `dummy/raw/{dataset_name}`.
-    """
-    from datasets import load_dataset
+    Пути: `dummy/raw/{dataset_name}/train.jsonl` и `dummy/raw/{dataset_name}/test.jsonl`.
 
+    Возвращает список словарей, чтобы избежать проблем нестрогого schema-casting
+    в старых версиях `datasets`.
+    """
     cache_root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath())
     cache_dir: Path = cache_root / config.tape_cache_subdir
-    tape_data_dir: str = build_tape_data_dir(tape_name=tape_name)
-
-    dataset: Any = load_dataset(
-        config.tape_repo,
-        name=tape_name,
-        data_dir=tape_data_dir,
-        cache_dir=str(cache_dir),
+    data_files: dict[str, str] = download_tape_data_files(
+        config=config,
+        tape_name=tape_name,
+        cache_dir=cache_dir,
     )
-    return dataset["train"]
+
+    train_records: list[dict[str, Any]] = read_jsonl_records(
+        fpath=data_files["train"],
+        tape_name=tape_name,
+    )
+    logger.info(f"Загружено {len(train_records)} записей для TAPE {tape_name}")
+    return train_records
 
 
 def retrieve_dataset(
@@ -343,10 +428,4 @@ def unpack_all_datasets(datasets_map: dict[str, Iterable[dict[str, Any]]]) -> tu
         all_answers.extend(answers)
 
     return all_queries, all_answers
-
-
-
-
-
-
 

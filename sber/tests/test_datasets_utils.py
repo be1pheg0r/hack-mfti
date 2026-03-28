@@ -5,35 +5,58 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import *
 
-from sber.datasets_utils import SberDatasetsConfig, build_tape_data_dir, load_tape_dataset
+from sber.datasets_utils import (
+    SberDatasetsConfig,
+    build_tape_data_dir,
+    build_tape_data_files,
+    load_tape_dataset,
+    read_jsonl_records,
+)
 
 
-class _FakeDatasetDict(dict[str, Any]):
-    pass
-
-
-def test_build_tape_data_dir() -> None:
-    assert build_tape_data_dir("chegeka.raw") == "dummy/raw/chegeka"
-    assert build_tape_data_dir("multiq.raw") == "dummy/raw/multiq"
-
-
-def test_load_tape_dataset_passes_name_and_data_dir(monkeypatch: Any, tmp_path: Path) -> None:
+def test_load_tape_dataset_downloads_jsonl_and_reads_train(monkeypatch: Any, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_load_dataset(*args: Any, **kwargs: Any) -> _FakeDatasetDict:
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return _FakeDatasetDict({"train": [{"question": "q", "answer": "a"}]})
+    def fake_hf_hub_download(*, repo_id: str, repo_type: str, filename: str, cache_dir: str) -> str:
+        captured.setdefault("downloads", []).append(
+            {
+                "repo_id": repo_id,
+                "repo_type": repo_type,
+                "filename": filename,
+                "cache_dir": cache_dir,
+            }
+        )
+        local_path: Path = Path(cache_dir) / filename
+        local_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fake_module = SimpleNamespace(load_dataset=fake_load_dataset)
-    monkeypatch.setitem(sys.modules, "datasets", fake_module)
+        if filename.endswith("train.jsonl"):
+            local_path.write_text('{"question":"q","answer":"a"}\n', encoding="utf-8")
+        else:
+            local_path.write_text('{"question":"tq","answer":"ta"}\n', encoding="utf-8")
+        return str(local_path)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(hf_hub_download=fake_hf_hub_download))
 
     config = SberDatasetsConfig(tape_repo="RussianNLP/tape", tape_cache_subdir="tape")
     train = load_tape_dataset(config=config, tape_name="chegeka.raw", data_root=tmp_path)
 
     assert train == [{"question": "q", "answer": "a"}]
-    assert captured["args"] == ("RussianNLP/tape",)
-    assert captured["kwargs"]["name"] == "chegeka.raw"
-    assert captured["kwargs"]["data_dir"] == "dummy/raw/chegeka"
-    assert captured["kwargs"]["cache_dir"] == str(tmp_path / "tape")
 
+    downloaded_filenames: list[str] = [item["filename"] for item in captured["downloads"]]
+    assert "dummy/raw/chegeka/train.jsonl" in downloaded_filenames
+    assert "dummy/raw/chegeka/test.jsonl" in downloaded_filenames
+
+
+def test_read_jsonl_records_normalizes_multiq_answers(tmp_path: Path) -> None:
+    jsonl_path: Path = tmp_path / "train.jsonl"
+    jsonl_path.write_text(
+        '{"question": "q1", "main_answers": {}, "bridge_answers": []}\n'
+        '{"question": "q2", "main_answers": [{"segment": "ans"}], "bridge_answers": {"segment": "b"}}\n',
+        encoding="utf-8",
+    )
+
+    records: list[dict[str, Any]] = read_jsonl_records(jsonl_path, tape_name="multiq.raw")
+    assert records[0]["main_answers"] == []
+    assert records[0]["bridge_answers"] == []
+    assert records[1]["main_answers"] == [{"segment": "ans"}]
+    assert records[1]["bridge_answers"] == [{"segment": "b"}]
