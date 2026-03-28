@@ -6,6 +6,7 @@ accelerate>=0.34.0
 
 # NLI / embeddings
 scikit-learn>=1.5.0
+catboost>=1.2.5
 
 # Fuzzy matching
 rapidfuzz>=3.9.0

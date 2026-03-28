@@ -1,0 +1,31 @@
+should_split:
+  include_extra_text_features: true
+  training:
+    random_state: 42
+    primary_metric: accuracy
+    categorical_features:
+      - source_mc_id
+    numeric_imputer_fill_value: 0.0
+    logistic_regression:
+      enabled: true
+      max_iter: 1200
+      class_weight: balanced
+    random_forest:
+      enabled: true
+      n_estimators: 400
+      class_weight: balanced_subsample
+    hist_gradient_boosting:
+      enabled: true
+      max_depth: 8
+      max_iter: 300
+      learning_rate: 0.05
+    catboost:
+      enabled: true
+      iterations: 400
+      learning_rate: 0.05
+      depth: 6
+      auto_class_weights: Balanced
+  cli_defaults:
+    dataset_filename: rnc_dataset.csv
+    artifact_filename: avito_should_split_model.joblib
+    report_filename: avito_should_split_report.json
