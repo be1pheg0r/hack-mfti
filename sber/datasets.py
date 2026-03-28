@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.files import read_yaml
 from common.logger import SBER_DATASETS_LOGGER as logger
-from common.paths import PathLike, get_sber_data_dpath
+from common.paths import PathLike, get_sber_gitignore_data_dpath
 from sber.constants import (
     DEFAULT_DATASET_NAMES,
     DEFAULT_KAGGLE_API_URL_TEMPLATE,
@@ -101,7 +101,7 @@ def get_rubq_local_dir_name(config: SberDatasetsConfig) -> str:
 
 def get_rubq_target_dir(config: SberDatasetsConfig, data_root: PathLike | None = None) -> Path:
     """Возвращает каталог для локального хранения RuBQ."""
-    root: Path = Path(data_root) if data_root is not None else Path(get_sber_data_dpath()) / "gitignore"
+    root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath()) / "gitignore"
     return root / get_rubq_local_dir_name(config)
 
 
@@ -218,7 +218,7 @@ def load_tape_dataset(
     """Загружает датасет из репозитория TAPE."""
     from datasets import load_dataset
 
-    cache_root: Path = Path(data_root) if data_root is not None else Path(get_sber_data_dpath()) / "gitignore"
+    cache_root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath()) / "gitignore"
     cache_dir: Path = cache_root / config.tape_cache_subdir
     return load_dataset(
         config.tape_repo,

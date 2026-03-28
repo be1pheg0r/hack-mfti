@@ -189,3 +189,12 @@ def get_checkpoints_dpath() -> PathLike:
     :return: Path: Путь к каталогу контрольных точек моделей.
     """
     return get_project_root() / "checkpoints"
+
+@fixdir
+@sber
+def get_sber_gitignore_data_dpath() -> PathLike:
+    """
+    Каталог для хранения данных, игнорируемых Git, для сбер кейса.
+    :return: Path: Путь к каталогу данных, игнорируемых Git, для сбер кейса.
+    """
+    return get_sber_data_dpath() / "gitignore"
