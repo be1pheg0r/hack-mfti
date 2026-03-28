@@ -5,5 +5,6 @@ scikit-learn
 jupyter
 matplotlib
 seaborn
+datasets==2.14.0
 umap-learn
 rapidfuzz
