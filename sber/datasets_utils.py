@@ -206,22 +206,46 @@ def load_rubq_dataset(
     return dataset
 
 
+def build_tape_data_dir(tape_name: str) -> str:
+    """Возвращает путь до подкаталога датасета внутри RussianNLP/tape.
+
+    Args:
+        tape_name: Имя датасета, например `chegeka.raw`.
+
+    Returns:
+        Относительный путь внутри репозитория датасета на Hugging Face.
+    """
+    normalized_name: str = tape_name.strip()
+    if not normalized_name:
+        raise ValueError("tape_name не может быть пустым")
+
+    dataset_name: str = normalized_name.removesuffix(".raw")
+    return f"dummy/raw/{dataset_name}"
+
+
 def load_tape_dataset(
     config: SberDatasetsConfig,
     tape_name: str,
     data_root: PathLike | None = None,
 ) -> Any:
-    """Загружает датасет из репозитория TAPE."""
+    """Загружает датасет из репозитория TAPE.
+
+    Источник: https://huggingface.co/datasets/RussianNLP/tape
+    Путь внутри репозитория: `dummy/raw/{dataset_name}`.
+    """
     from datasets import load_dataset
 
-    cache_root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath()) 
+    cache_root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath())
     cache_dir: Path = cache_root / config.tape_cache_subdir
-    return load_dataset(
+    tape_data_dir: str = build_tape_data_dir(tape_name=tape_name)
+
+    dataset: Any = load_dataset(
         config.tape_repo,
         name=tape_name,
-        # trust_remote_code=True,
+        data_dir=tape_data_dir,
         cache_dir=str(cache_dir),
-    )["train"]
+    )
+    return dataset["train"]
 
 
 def retrieve_dataset(
@@ -319,6 +343,10 @@ def unpack_all_datasets(datasets_map: dict[str, Iterable[dict[str, Any]]]) -> tu
         all_answers.extend(answers)
 
     return all_queries, all_answers
+
+
+
+
 
 
 
