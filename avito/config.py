@@ -12,16 +12,16 @@ DEFAULT_AVITO_CONFIG_FPATH = Path(__file__).resolve().parent / "config.yaml"
 
 
 class ShouldSplitTrainingConfig(BaseModel):
-    """General process configuration for shouldSplit training.
+    """Общая конфигурация процесса обучения shouldSplit.
 
     Attributes:
-        random_state: Random seed for reproducible training.
-        categorical_features: Categorical feature names.
-        numeric_imputer_fill_value: Fill value for numeric imputer.
-        merge_train_test_for_fit: Whether to fit models on merged train+test split.
-        optuna_n_trials: Number of Optuna trials for best-architecture tuning.
-        optuna_timeout_sec: Optional timeout for Optuna tuning in seconds.
-        objective_metric: Name of optimization metric.
+        random_state: Seed для воспроизводимого обучения.
+        categorical_features: Имена категориальных признаков.
+        numeric_imputer_fill_value: Значение заполнения для числового imputer.
+        merge_train_test_for_fit: Обучать ли модели на объединении train+test.
+        optuna_n_trials: Число trial в Optuna для тюнинга лучшей архитектуры.
+        optuna_timeout_sec: Ограничение времени Optuna-тюнинга в секундах.
+        objective_metric: Название оптимизируемой метрики.
     """
 
     random_state: int = 42
@@ -36,31 +36,31 @@ class ShouldSplitTrainingConfig(BaseModel):
     @classmethod
     def validate_random_state(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("random_state must be non-negative")
+            raise ValueError("random_state должен быть неотрицательным")
         return value
 
     @field_validator("optuna_n_trials")
     @classmethod
     def validate_optuna_n_trials(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("optuna_n_trials must be positive")
+            raise ValueError("optuna_n_trials должен быть положительным")
         return value
 
     @field_validator("objective_metric")
     @classmethod
     def validate_objective_metric(cls, value: str) -> str:
         if value.strip() != "ratio_abs_delta":
-            raise ValueError("Only ratio_abs_delta objective metric is supported")
+            raise ValueError("Поддерживается только метрика ratio_abs_delta")
         return value
 
 
 class ShouldSplitCliDefaultsConfig(BaseModel):
-    """Default file names for train CLI artifacts.
+    """Имена файлов по умолчанию для CLI-режима обучения.
 
     Attributes:
-        dataset_filename: Dataset CSV file name in avito/data.
-        artifact_filename: Model artifact file name in checkpoints.
-        report_filename: Metrics report file name in checkpoints.
+        dataset_filename: Имя CSV-датасета в avito/data.
+        artifact_filename: Имя файла артефакта модели в checkpoints.
+        report_filename: Имя файла JSON-отчета в checkpoints.
     """
 
     dataset_filename: str = "rnc_dataset.csv"
@@ -69,12 +69,12 @@ class ShouldSplitCliDefaultsConfig(BaseModel):
 
 
 class ShouldSplitCaseConfig(BaseModel):
-    """Root config block for shouldSplit case settings.
+    """Корневой конфиг-блок для shouldSplit.
 
     Attributes:
-        include_extra_text_features: Whether to compute extra text features.
-        training: Training pipeline hyperparameters and model settings.
-        cli_defaults: Default file names for CLI mode.
+        include_extra_text_features: Считать ли дополнительные текстовые признаки.
+        training: Настройки процесса обучения.
+        cli_defaults: Имена файлов по умолчанию для CLI.
     """
 
     include_extra_text_features: bool = True
@@ -83,11 +83,11 @@ class ShouldSplitCaseConfig(BaseModel):
 
 
 class AvitoCaseConfig(BaseModel):
-    """Top-level Avito case configuration.
+    """Верхнеуровневая конфигурация кейса Avito.
 
     Attributes:
-        config_path: Optional source path for YAML loading.
-        should_split: shouldSplit subsystem config.
+        config_path: Опциональный путь к YAML-конфигу.
+        should_split: Конфиг подсистемы shouldSplit.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -110,9 +110,9 @@ class AvitoCaseConfig(BaseModel):
 
         yaml_data = read_yaml(config_path)
         if yaml_data is None:
-            raise ValueError(f"Config file is empty: {config_path}")
+            raise ValueError(f"Конфиг-файл пустой: {config_path}")
         if not isinstance(yaml_data, dict):
-            raise ValueError(f"Expected YAML mapping at root: {config_path}")
+            raise ValueError(f"Ожидается YAML-словарь в корне: {config_path}")
 
         explicit_values = {
             key: item
@@ -124,9 +124,9 @@ class AvitoCaseConfig(BaseModel):
 
     @classmethod
     def from_default_yaml(cls) -> AvitoCaseConfig:
-        """Create config from default avito/config.yaml file.
+        """Создает конфиг из файла avito/config.yaml по умолчанию.
 
         Returns:
-            Parsed and validated case configuration.
+            Распарсенная и провалидированная конфигурация кейса.
         """
         return cls.model_validate({"config_path": DEFAULT_AVITO_CONFIG_FPATH})

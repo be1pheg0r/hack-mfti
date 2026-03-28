@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+import warnings
 
 import numpy as np
 import optuna
@@ -22,19 +23,25 @@ from avito.config import ShouldSplitTrainingConfig
 from avito.constants import GT_SHOULD_SPLIT_RATIO
 from avito.features import ShouldSplitFeatureConfig, TextEncoderLike, build_training_matrix
 from common.files import read_yaml
+from common.logger import (
+    AVITO_SHOULD_SPLIT_LOGGER as logger,
+    fit_model_with_progress,
+    log_block_separator,
+    predict_with_clean_warnings,
+)
 
 
 @dataclass(frozen=True)
 class ShouldSplitModelConfigPaths:
-    """Paths to per-architecture model configs.
+    """Пути к конфигам архитектур shouldSplit.
 
     Attributes:
-        logistic_regression: Path to Logistic Regression config.
-        random_forest: Path to Random Forest config.
-        hist_gradient_boosting: Path to Hist Gradient Boosting config.
-        catboost: Path to CatBoost config.
-        xgboost: Path to XGBoost config.
-        lightgbm: Path to LightGBM config.
+        logistic_regression: Путь к конфигу Logistic Regression.
+        random_forest: Путь к конфигу Random Forest.
+        hist_gradient_boosting: Путь к конфигу Hist Gradient Boosting.
+        catboost: Путь к конфигу CatBoost.
+        xgboost: Путь к конфигу XGBoost.
+        lightgbm: Путь к конфигу LightGBM.
     """
 
     logistic_regression: Path
@@ -46,7 +53,7 @@ class ShouldSplitModelConfigPaths:
 
 
 def get_should_split_model_config_paths() -> ShouldSplitModelConfigPaths:
-    """Return absolute paths for per-architecture shouldSplit configs."""
+    """Возвращает абсолютные пути к конфигам архитектур shouldSplit."""
     config_dir = Path(__file__).resolve().parent / "configs" / "should_split"
     return ShouldSplitModelConfigPaths(
         logistic_regression=config_dir / "logistic_regression.yaml",
@@ -59,15 +66,15 @@ def get_should_split_model_config_paths() -> ShouldSplitModelConfigPaths:
 
 
 class TuneParamConfig(BaseModel):
-    """Single tunable parameter config for Optuna.
+    """Конфигурация одного тюнимого параметра для Optuna.
 
     Attributes:
-        type: Parameter type for suggestion.
-        low: Lower bound for numeric params.
-        high: Upper bound for numeric params.
-        choices: Categorical options.
-        log: Whether to use log scale for numeric suggestions.
-        step: Optional step for numeric suggestions.
+        type: Тип параметра для suggest-функций.
+        low: Нижняя граница для числовых параметров.
+        high: Верхняя граница для числовых параметров.
+        choices: Варианты для категориальных параметров.
+        log: Использовать ли логарифмическую шкалу.
+        step: Шаг для числовых параметров.
     """
 
     type: Literal["int", "float", "categorical"]
@@ -91,12 +98,12 @@ class TuneParamConfig(BaseModel):
 
 
 class ModelArchitectureConfig(BaseModel):
-    """Config for one candidate architecture.
+    """Конфиг одной кандидатной архитектуры.
 
     Attributes:
-        enabled: Whether architecture participates in model selection.
-        params: Base estimator parameters.
-        for_tune: Tunable params for Optuna.
+        enabled: Участвует ли архитектура в сравнении.
+        params: Базовые параметры оценщика.
+        for_tune: Параметры, доступные для тюнинга через Optuna.
     """
 
     enabled: bool = True
@@ -105,17 +112,17 @@ class ModelArchitectureConfig(BaseModel):
 
 
 class TrainedShouldSplitModel(BaseModel):
-    """Training result for shouldSplit model selection.
+    """Результат обучения и выбора модели shouldSplit.
 
     Attributes:
-        model_name: Name of selected architecture.
-        pipeline: Fitted sklearn pipeline.
-        gt_should_split_ratio: Ground-truth positive ratio used for optimization.
-        model_should_split_ratio: Predicted positive ratio on validation split.
-        ratio_delta: Signed difference gt_should_split_ratio - model_should_split_ratio.
-        ratio_abs_delta: Absolute difference for optimization.
-        tuned_params: Params sampled by Optuna for best architecture.
-        model_comparison_records: Validation metric records for all architectures.
+        model_name: Название выбранной архитектуры.
+        pipeline: Обученный sklearn pipeline.
+        gt_should_split_ratio: Целевая доля положительного класса.
+        model_should_split_ratio: Доля положительного класса в предсказаниях на валидации.
+        ratio_delta: Разница gt_should_split_ratio - model_should_split_ratio.
+        ratio_abs_delta: Абсолютная разница, используемая как метрика.
+        tuned_params: Лучшие параметры после Optuna-тюнинга.
+        model_comparison_records: Записи метрик по всем архитектурам.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -183,13 +190,13 @@ def _load_architecture_configs() -> dict[str, ModelArchitectureConfig]:
     for architecture_name, config_path in architecture_files.items():
         raw_data = read_yaml(config_path)
         if raw_data is None:
-            raise ValueError(f"Architecture config is empty: {config_path}")
+            raise ValueError(f"Пустой конфиг архитектуры: {config_path}")
         if not isinstance(raw_data, dict):
-            raise ValueError(f"Architecture config must be mapping: {config_path}")
+            raise ValueError(f"Конфиг архитектуры должен быть словарем: {config_path}")
         configs[architecture_name] = ModelArchitectureConfig.model_validate(raw_data)
 
     if not any(config.enabled for config in configs.values()):
-        raise ValueError("At least one architecture must be enabled in model config files")
+        raise ValueError("Хотя бы одна архитектура должна быть включена в model-конфигах")
 
     return configs
 
@@ -217,7 +224,7 @@ def _make_estimator(
 
     if architecture_name == "catboost":
         effective_params.setdefault("random_seed", random_state)
-        effective_params.setdefault("verbose", False)
+        effective_params.setdefault("verbose", 100)  # Логировать каждые 100 итераций
         effective_params.setdefault("loss_function", "Logloss")
         return CatBoostClassifier(**effective_params)
 
@@ -225,14 +232,16 @@ def _make_estimator(
         effective_params.setdefault("random_state", random_state)
         effective_params.setdefault("n_jobs", -1)
         effective_params.setdefault("eval_metric", "logloss")
+        effective_params.setdefault("verbosity", 1)  # Логировать прогресс обучения
         return XGBClassifier(**effective_params)
 
     if architecture_name == "lightgbm":
         effective_params.setdefault("random_state", random_state)
         effective_params.setdefault("n_jobs", -1)
+        effective_params.setdefault("verbosity", 0)  # Логировать прогресс обучения
         return LGBMClassifier(**effective_params)
 
-    raise ValueError(f"Unknown architecture: {architecture_name}")
+    raise ValueError(f"Неизвестная архитектура: {architecture_name}")
 
 
 def _sample_tune_params(
@@ -248,13 +257,13 @@ def _sample_tune_params(
         if tune_param.type == "categorical":
             choices = tune_param.choices
             if choices is None:
-                raise ValueError(f"choices must be provided for categorical tune param: {param_name}")
+                raise ValueError(f"Для категориального параметра нужно задать choices: {param_name}")
             choices_tuple: tuple[str | int | float | bool, ...] = tuple(choices)
             sampled_params[param_name] = trial.suggest_categorical(trial_param_name, choices_tuple)
             continue
 
         if tune_param.low is None or tune_param.high is None:
-            raise ValueError(f"low/high must be provided for numeric tune param: {param_name}")
+            raise ValueError(f"Для числового параметра нужно задать low/high: {param_name}")
 
         if tune_param.type == "int":
             sampled_params[param_name] = trial.suggest_int(
@@ -297,7 +306,7 @@ def _split_frame(
     val_mask = split.eq("val")
 
     if not train_mask.any() or not test_mask.any() or not val_mask.any():
-        raise ValueError("Expected non-empty split groups train/val/test")
+        raise ValueError("Ожидаются непустые группы split: train/test/val")
 
     fit_mask = (train_mask | test_mask) if merge_train_test_for_fit else train_mask
     return (
@@ -311,22 +320,22 @@ def _split_frame(
 def train_should_split_models(
     df: pd.DataFrame,
     *,
-    include_embeddings: bool = False,
+    include_embeddings: bool = True,
     encoder: TextEncoderLike | None = None,
     feature_config: ShouldSplitFeatureConfig | None = None,
     training_config: ShouldSplitTrainingConfig | None = None,
 ) -> TrainedShouldSplitModel:
-    """Train, compare, and tune shouldSplit architectures.
+    """Обучает, сравнивает и тюнит архитектуры shouldSplit.
 
     Args:
-        df: Input dataset with split labels and target.
-        include_embeddings: Whether to append embedding features.
-        encoder: Encoder for embedding extraction.
-        feature_config: Feature extraction configuration.
-        training_config: General process configuration.
+        df: Входной датасет с таргетом и split-колонкой.
+        include_embeddings: Добавлять ли эмбеддинговые признаки.
+        encoder: Энкодер для генерации эмбеддингов.
+        feature_config: Конфиг извлечения признаков.
+        training_config: Общий конфиг процесса обучения.
 
     Returns:
-        Pydantic result with best architecture trained pipeline and ratio metric values.
+        Pydantic-результат с лучшей архитектурой и значениями ratio-метрики.
     """
     effective_training_config = training_config or ShouldSplitTrainingConfig()
     architecture_configs = _load_architecture_configs()
@@ -345,15 +354,27 @@ def train_should_split_models(
     )
 
     preprocessor = _build_preprocessor(X, config=effective_training_config)
+    enabled_models_count = sum(1 for cfg in architecture_configs.values() if cfg.enabled)
+    log_block_separator(logger)
+    logger.info("Старт сравнения архитектур shouldSplit")
+    logger.info(f"Кандидатов в сравнении: {enabled_models_count}")
+    log_block_separator(logger)
 
     model_rows: list[dict[str, float | str]] = []
     best_model_name: str | None = None
     best_base_params: dict[str, Any] | None = None
     best_ratio_abs_delta = float("inf")
 
-    for architecture_name, architecture_config in architecture_configs.items():
-        if not architecture_config.enabled:
-            continue
+    enabled_items = [
+        (name, cfg)
+        for name, cfg in architecture_configs.items()
+        if cfg.enabled
+    ]
+
+    for architecture_index, (architecture_name, architecture_config) in enumerate(enabled_items, start=1):
+        log_block_separator(logger)
+        logger.info(f"[{architecture_index}/{len(enabled_items)}] Архитектура: {architecture_name}")
+        logger.info(f"Базовые параметры: {architecture_config.params}")
 
         estimator = _make_estimator(
             architecture_name,
@@ -361,9 +382,11 @@ def train_should_split_models(
             random_state=effective_training_config.random_state,
         )
         pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", estimator)])
-        pipeline.fit(X_fit, y_fit)
+        logger.info(f"Обучение началось...")
+        fit_model_with_progress(pipeline, X_fit, y_fit, X_val)
+        logger.info(f"Обучение завершено.")
 
-        val_pred = np.asarray(pipeline.predict(X_val))
+        val_pred = predict_with_clean_warnings(pipeline, X_val)
         model_ratio, ratio_delta, ratio_abs_delta = _compute_ratio_metrics(val_pred)
 
         model_rows.append(
@@ -381,13 +404,31 @@ def train_should_split_models(
             best_model_name = architecture_name
             best_base_params = dict(architecture_config.params)
 
+        logger.info("Результат на валидации:")
+        logger.info(f"  gt_should_split_ratio    = {GT_SHOULD_SPLIT_RATIO:.4f}")
+        logger.info(f"  model_should_split_ratio = {model_ratio:.4f}")
+        logger.info(f"  ratio_delta              = {ratio_delta:.6f}")
+        logger.info(f"  ratio_abs_delta          = {ratio_abs_delta:.6f}")
+
     if best_model_name is None or best_base_params is None:
-        raise RuntimeError("Failed to choose the best shouldSplit architecture")
+        raise RuntimeError("Не удалось выбрать лучшую архитектуру shouldSplit")
+
+    logger.info("Итог базового сравнения:")
+    logger.info(
+        f"Лучшая архитектура до тюнинга: {best_model_name}; ratio_abs_delta={best_ratio_abs_delta:.6f}"
+    )
 
     best_arch_config = architecture_configs[best_model_name]
 
     tuned_params: dict[str, Any] = {}
     if best_arch_config.for_tune:
+        log_block_separator(logger)
+        logger.info("Запуск Optuna-тюнинга")
+        logger.info(f"Архитектура: {best_model_name}")
+        logger.info(f"n_trials: {effective_training_config.optuna_n_trials}")
+        logger.info(f"timeout: {effective_training_config.optuna_timeout_sec}")
+        log_block_separator(logger)
+
         def objective(trial: optuna.Trial) -> float:
             sampled_params = _sample_tune_params(
                 trial=trial,
@@ -401,17 +442,30 @@ def train_should_split_models(
                 random_state=effective_training_config.random_state,
             )
             pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", estimator)])
-            pipeline.fit(X_fit, y_fit)
-            val_pred = np.asarray(pipeline.predict(X_val))
+            try:
+                fit_model_with_progress(pipeline, X_fit, y_fit, X_val)
+            except Exception as fit_error:
+                logger.warning(f"Ошибка обучения во время trial: {fit_error}")
+                return float('inf')
+            val_pred = predict_with_clean_warnings(pipeline, X_val)
             _, _, ratio_abs_delta = _compute_ratio_metrics(val_pred)
             return ratio_abs_delta
 
+        def _trial_callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+            logger.info(
+                "Optuna trial завершен: "
+                f"trial={trial.number}, value={trial.value:.6f}, best={study.best_value:.6f}"
+            )
+            logger.info(f"  params={trial.params}")
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
         study = optuna.create_study(direction="minimize")
         study.optimize(
             objective,
             n_trials=effective_training_config.optuna_n_trials,
             timeout=effective_training_config.optuna_timeout_sec,
             show_progress_bar=False,
+            callbacks=[_trial_callback],
         )
 
         tuned_params = {
@@ -419,6 +473,13 @@ def train_should_split_models(
             for prefixed_name, value in study.best_trial.params.items()
             for param_name in [prefixed_name.replace(f"{best_model_name}__", "", 1)]
         }
+        log_block_separator(logger)
+        logger.info(f"Лучшие параметры после Optuna для {best_model_name}:")
+        logger.info(f"  tuned_params={tuned_params}")
+        logger.info(f"  best_value={study.best_value:.6f}")
+        log_block_separator(logger)
+    else:
+        logger.info(f"Для архитектуры {best_model_name} не задан for_tune, тюнинг пропущен")
 
     final_params = {**best_base_params, **tuned_params}
     final_estimator = _make_estimator(
@@ -427,10 +488,20 @@ def train_should_split_models(
         random_state=effective_training_config.random_state,
     )
     final_pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", final_estimator)])
-    final_pipeline.fit(X_fit, y_fit)
+    logger.info(f"Финальное обучение модели {best_model_name} на объединенных train+test...")
+    fit_model_with_progress(final_pipeline, X_fit, y_fit, X_val)
+    logger.info(f"Финальное обучение завершено.")
 
-    final_val_pred = np.asarray(final_pipeline.predict(X_val))
+    final_val_pred = predict_with_clean_warnings(final_pipeline, X_val)
     final_model_ratio, final_ratio_delta, final_ratio_abs_delta = _compute_ratio_metrics(final_val_pred)
+
+    log_block_separator(logger)
+    logger.info(f"Финальная модель: {best_model_name}")
+    logger.info(f"  gt_should_split_ratio    = {GT_SHOULD_SPLIT_RATIO:.4f}")
+    logger.info(f"  model_should_split_ratio = {final_model_ratio:.4f}")
+    logger.info(f"  ratio_delta              = {final_ratio_delta:.6f}")
+    logger.info(f"  ratio_abs_delta          = {final_ratio_abs_delta:.6f}")
+    log_block_separator(logger)
 
     comparison_records_raw = (
         pd.DataFrame(model_rows)
@@ -442,6 +513,16 @@ def train_should_split_models(
         {str(key): value for key, value in row.items()}
         for row in comparison_records_raw
     ]
+
+    logger.info("Рейтинг архитектур по ratio_abs_delta:")
+    for rank, row in enumerate(comparison_records, start=1):
+        logger.info(
+            f"  #{rank} {row['model']}: "
+            f"ratio_abs_delta={float(row['ratio_abs_delta']):.6f}, "
+            f"model_ratio={float(row['model_should_split_ratio']):.4f}, "
+            f"ratio_delta={float(row['ratio_delta']):.6f}"
+        )
+    log_block_separator(logger)
 
     return TrainedShouldSplitModel(
         model_name=best_model_name,
