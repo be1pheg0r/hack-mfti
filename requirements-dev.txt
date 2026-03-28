@@ -5,7 +5,5 @@ scikit-learn
 jupyter
 matplotlib
 seaborn
-datasets==2.14.6
-pyarrow<21.0.0
-rapidfuzz
+datasets
 umap-learn
