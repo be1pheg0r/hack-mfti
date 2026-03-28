@@ -1,0 +1,12 @@
+datasets:
+  rubq_slug: "valentinbiryukov/rubq-20"
+  rubq_archive_name: "rubq-20.zip"
+  rubq_json_name: "RuBQ_2.0_dev.json"
+  tape_repo: "RussianNLP/tape"
+  tape_cache_subdir: "tape"
+  dataset_names:
+    - "rubq-20"
+    - "tape-chegeka.raw"
+    - "tape-multiq.raw"
+  kaggle_api_url_template: "https://www.kaggle.com/api/v1/datasets/download/{dataset_slug}"
+
