@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import *
 import zipfile
 
-from sber.datasets import (
+from sber.datasets_utils import (
     SberDatasetsConfig,
     build_curl_download_command,
     ensure_rubq_dataset,
@@ -14,7 +14,7 @@ from sber.datasets import (
 
 
 def test_datasets_config_from_yaml(tmp_path: Path) -> None:
-    config_fpath: Path = tmp_path / "datasets.yaml"
+    config_fpath: Path = tmp_path / "datasets_configs.yaml"
     config_fpath.write_text(
         "datasets:\n"
         "  rubq_slug: valentinbiryukov/rubq-20\n"

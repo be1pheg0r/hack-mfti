@@ -159,8 +159,9 @@ def get_project_logger(config_name: str) -> logging.Logger:
 
 
 MISTRAL_LOGGER: logging.Logger = get_project_logger("mistral_call")
-SBER_HOOKS_LOGGER: logging.Logger = get_project_logger("sber_pt_hooks")
 JUPYTER_LOGGER: logging.Logger = get_project_logger("jupyter_notebooks")
+
+SBER_HOOKS_LOGGER: logging.Logger = get_project_logger("sber_pt_hooks")
 SBER_DATASETS_LOGGER: logging.Logger = get_project_logger("sber_datasets")
 
 

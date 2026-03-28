@@ -198,3 +198,21 @@ def get_sber_gitignore_data_dpath() -> PathLike:
     :return: Path: Путь к каталогу данных, игнорируемых Git, для сбер кейса.
     """
     return get_sber_data_dpath() / "gitignore"
+
+@fixdir
+@sber
+def get_sber_checkpoints_dpath() -> PathLike:
+    """
+    Каталог для хранения контрольных точек моделей для сбер кейса.
+    :return: Path: Путь к каталогу контрольных точек моделей для сбер кейса.
+    """
+    return get_sber_dpath() / "checkpoints"
+
+@fixdir
+@sber
+def get_sber_configs_dpath() -> PathLike:
+    """
+    Каталог для хранения конфигурационных файлов для сбер кейса.
+    :return: Path: Путь к каталогу конфигурационных файлов для сбер кейса.
+    """
+    return get_sber_dpath() / "configs"
