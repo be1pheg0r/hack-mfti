@@ -542,3 +542,110 @@ class LLMFeatureExtractor:
             moe_routing=moe_features,
         )
 
+
+class DummyFeatureModelConfig(BaseModel):
+    """Конфигурация dummy-модели фичей.
+
+    Attributes:
+        probe_dim: Размерность вектора `probe_vec`.
+        vocab_size: Размер словаря для генерации фиктивных логитов.
+        seed: Начальное значение генератора случайных чисел.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    probe_dim: int = 4096
+    vocab_size: int = 32000
+    seed: int = 42
+
+    @field_validator("probe_dim", "vocab_size")
+    @classmethod
+    def validate_positive(cls, value: int) -> int:
+        """Проверяет, что размерности положительные."""
+        if value <= 0:
+            raise ValueError("Размерность должна быть положительной")
+        return value
+
+
+class DummyFeatureModel:
+    """Генерирует случайные фичи в контракте FeatureGroups для тестов."""
+
+    def __init__(
+        self,
+        config: FeatureExtractorConfig | None = None,
+        dummy_config: DummyFeatureModelConfig | None = None,
+    ) -> None:
+        """Инициализирует dummy-модель.
+
+        Args:
+            config: Конфиг экстрактора, задающий размеры групп по слоям.
+            dummy_config: Конфиг генерации случайных данных.
+        """
+        self.config: FeatureExtractorConfig = config or FeatureExtractorConfig()
+        self.dummy_config: DummyFeatureModelConfig = dummy_config or DummyFeatureModelConfig()
+        self._generator: torch.Generator = torch.Generator()
+        self._generator.manual_seed(self.dummy_config.seed)
+
+    def _sample_list(self, size: int) -> list[float]:
+        """Возвращает список случайных чисел указанной длины."""
+        if size <= 0:
+            return []
+        sampled: torch.Tensor = torch.randn(size, generator=self._generator, dtype=torch.float32)
+        return [float(x) for x in sampled.tolist()]
+
+    def forward(self, token_ids: torch.Tensor) -> Any:
+        """Генерирует фиктивный выход модели с случайными логитами.
+
+        Args:
+            token_ids: Входные токены формы [batch, seq_len].
+
+        Returns:
+            Объект с полем `logits` формы [batch, seq_len, vocab_size].
+        """
+        if token_ids.ndim != 2:
+            raise ValueError("Ожидается token_ids формы [batch, seq_len]")
+
+        batch_size: int = int(token_ids.shape[0])
+        seq_len: int = int(token_ids.shape[1])
+        logits: torch.Tensor = torch.randn(
+            batch_size,
+            seq_len,
+            self.dummy_config.vocab_size,
+            generator=self._generator,
+            dtype=torch.float32,
+            device=token_ids.device,
+        )
+        return {"logits": logits}
+
+    def extract(
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        answer_start: int,
+    ) -> FeatureGroups:
+        """Игнорирует входы и возвращает случайные фичи нужных размеров.
+
+        Args:
+            logits: Не используется, оставлен для совместимости контракта.
+            input_ids: Не используется, оставлен для совместимости контракта.
+            answer_start: Не используется, оставлен для совместимости контракта.
+
+        Returns:
+            Случайно сгенерированные группы фичей.
+        """
+        _ = (logits, input_ids, answer_start)
+
+        uncertainty_size: int = 12
+        internal_scalars_size: int = len(self.config.probe_layers) * 3
+        attention_size: int = len(self.config.probe_layers) * 3 if self.config.enable_attention_entropy else 0
+        entropy_drops_size: int = max(len(self.config.probe_layers) - 1, 0)
+        moe_size: int = 10 if self.config.enable_moe_routing else 0
+
+        return FeatureGroups(
+            uncertainty=self._sample_list(uncertainty_size),
+            internal_scalars=self._sample_list(internal_scalars_size),
+            probe_vec=self._sample_list(self.dummy_config.probe_dim),
+            attention_entropy=self._sample_list(attention_size),
+            entropy_drops=self._sample_list(entropy_drops_size),
+            moe_routing=self._sample_list(moe_size),
+        )

@@ -6,7 +6,7 @@ from typing import *
 import torch
 from torch import nn
 
-from sber.pt import FeatureExtractorConfig, LLMFeatureExtractor
+from sber.pt import DummyFeatureModel, DummyFeatureModelConfig, FeatureExtractorConfig, LLMFeatureExtractor
 
 
 class DummySelfAttention(nn.Module):
@@ -146,3 +146,38 @@ def test_llm_feature_extractor_produces_expected_feature_groups() -> None:
     )
     assert all(torch.isfinite(torch.tensor(all_values)).tolist())
 
+
+def test_dummy_feature_model_returns_random_features_with_expected_shapes() -> None:
+    config = FeatureExtractorConfig(
+        probe_layers=[0, 1, 2, 3],
+        enable_attention_entropy=True,
+        enable_moe_routing=True,
+    )
+    dummy_config = DummyFeatureModelConfig(probe_dim=128, vocab_size=100, seed=123)
+    dummy_model = DummyFeatureModel(config=config, dummy_config=dummy_config)
+
+    input_ids: torch.Tensor = torch.randint(low=0, high=100, size=(1, 9), dtype=torch.long)
+    dummy_out: dict[str, torch.Tensor] = dummy_model.forward(input_ids)
+    features = dummy_model.extract(
+        logits=dummy_out["logits"],
+        input_ids=input_ids,
+        answer_start=3,
+    )
+
+    assert tuple(dummy_out["logits"].shape) == (1, 9, 100)
+    assert len(features.uncertainty) == 12
+    assert len(features.internal_scalars) == len(config.probe_layers) * 3
+    assert len(features.probe_vec) == 128
+    assert len(features.attention_entropy) == len(config.probe_layers) * 3
+    assert len(features.entropy_drops) == len(config.probe_layers) - 1
+    assert len(features.moe_routing) == 10
+
+    all_values: list[float] = (
+        features.uncertainty
+        + features.internal_scalars
+        + features.probe_vec
+        + features.attention_entropy
+        + features.entropy_drops
+        + features.moe_routing
+    )
+    assert all(torch.isfinite(torch.tensor(all_values)).tolist())
