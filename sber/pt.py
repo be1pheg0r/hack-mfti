@@ -671,10 +671,10 @@ if __name__ == "__main__":
         answer_start=3,
     )
 
-    print("Uncertainty features:", features.uncertainty)
-    print("Internal scalars:", features.internal_scalars)
-    print("Probe vector:", features.probe_vec)
-    print("Attention entropy features:", features.attention_entropy)
-    print("Entropy drops:", features.entropy_drops)
-    print("MoE routing features:", features.moe_routing)
+    print("Неопределенность:", features.uncertainty)
+    print("Внутренние скаляры:", features.internal_scalars)
+    print("Проб-вектор:", features.probe_vec)
+    print("Энтропия внимания:", features.attention_entropy)
+    print("Падения энтропии логитов:", features.entropy_drops)
+    print("MoE роутинг:", features.moe_routing)
 
