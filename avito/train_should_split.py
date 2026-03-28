@@ -78,8 +78,11 @@ def main() -> None:
     artifact_payload = {
         "best_model_name": result.model_name,
         "pipeline": result.pipeline,
-        "val_metrics": result.val_metrics,
-        "test_metrics": result.test_metrics,
+        "gt_should_split_ratio": result.gt_should_split_ratio,
+        "model_should_split_ratio": result.model_should_split_ratio,
+        "ratio_delta": result.ratio_delta,
+        "ratio_abs_delta": result.ratio_abs_delta,
+        "tuned_params": result.tuned_params,
         "model_comparison": result.model_comparison_records,
         "with_embeddings": bool(args.with_embeddings),
         "feature_config": feature_config.model_dump(mode="json"),
@@ -91,16 +94,20 @@ def main() -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_payload = {
         "best_model_name": result.model_name,
-        "val_metrics": result.val_metrics,
-        "test_metrics": result.test_metrics,
+        "gt_should_split_ratio": result.gt_should_split_ratio,
+        "model_should_split_ratio": result.model_should_split_ratio,
+        "ratio_delta": result.ratio_delta,
+        "ratio_abs_delta": result.ratio_abs_delta,
+        "tuned_params": result.tuned_params,
         "model_comparison": result.model_comparison_records,
     }
     report_path.write_text(json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"Saved report JSON: {report_path}")
 
     logger.info(f"Best model: {result.model_name}")
-    logger.info(f"Validation Accuracy: {result.val_metrics['accuracy']:.4f}")
-    logger.info(f"Test Accuracy: {result.test_metrics['accuracy']:.4f}")
+    logger.info(f"GT shouldSplit ratio: {result.gt_should_split_ratio:.4f}")
+    logger.info(f"Model shouldSplit ratio: {result.model_should_split_ratio:.4f}")
+    logger.info(f"Ratio abs delta: {result.ratio_abs_delta:.6f}")
 
 
 if __name__ == "__main__":

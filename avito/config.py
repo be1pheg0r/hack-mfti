@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,132 +11,26 @@ from common.files import read_yaml
 DEFAULT_AVITO_CONFIG_FPATH = Path(__file__).resolve().parent / "config.yaml"
 
 
-class LogisticRegressionConfig(BaseModel):
-    """Hyperparameters for Logistic Regression.
-
-    Attributes:
-        enabled: Whether this model participates in comparison.
-        max_iter: Maximum number of optimization iterations.
-        class_weight: Class weighting strategy for imbalanced data.
-    """
-
-    enabled: bool = True
-    max_iter: int = 1200
-    class_weight: str = "balanced"
-
-    @field_validator("max_iter")
-    @classmethod
-    def validate_max_iter(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("max_iter must be positive")
-        return value
-
-
-class RandomForestConfig(BaseModel):
-    """Hyperparameters for Random Forest.
-
-    Attributes:
-        enabled: Whether this model participates in comparison.
-        n_estimators: Number of trees in the forest.
-        class_weight: Class weighting strategy for imbalanced data.
-    """
-
-    enabled: bool = True
-    n_estimators: int = 400
-    class_weight: Literal["balanced", "balanced_subsample"] | None = "balanced_subsample"
-
-    @field_validator("n_estimators")
-    @classmethod
-    def validate_n_estimators(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("n_estimators must be positive")
-        return value
-
-
-class HistGradientBoostingConfig(BaseModel):
-    """Hyperparameters for HistGradientBoostingClassifier.
-
-    Attributes:
-        enabled: Whether this model participates in comparison.
-        max_depth: Maximum depth of individual trees.
-        max_iter: Number of boosting iterations.
-        learning_rate: Boosting learning rate.
-    """
-
-    enabled: bool = True
-    max_depth: int = 8
-    max_iter: int = 300
-    learning_rate: float = 0.05
-
-    @field_validator("max_depth", "max_iter")
-    @classmethod
-    def validate_positive_int(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("max_depth and max_iter must be positive")
-        return value
-
-    @field_validator("learning_rate")
-    @classmethod
-    def validate_learning_rate(cls, value: float) -> float:
-        if value <= 0.0:
-            raise ValueError("learning_rate must be positive")
-        return value
-
-
-class CatBoostConfig(BaseModel):
-    """Hyperparameters for CatBoostClassifier.
-
-    Attributes:
-        enabled: Whether this model participates in comparison.
-        iterations: Number of boosting iterations.
-        learning_rate: Boosting learning rate.
-        depth: Tree depth.
-        auto_class_weights: Class weighting mode.
-    """
-
-    enabled: bool = True
-    iterations: int = 400
-    learning_rate: float = 0.05
-    depth: int = 6
-    auto_class_weights: Literal["Balanced", "SqrtBalanced"] | None = "Balanced"
-
-    @field_validator("iterations", "depth")
-    @classmethod
-    def validate_positive_int(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("iterations and depth must be positive")
-        return value
-
-    @field_validator("learning_rate")
-    @classmethod
-    def validate_learning_rate(cls, value: float) -> float:
-        if value <= 0.0:
-            raise ValueError("learning_rate must be positive")
-        return value
-
-
 class ShouldSplitTrainingConfig(BaseModel):
-    """Configuration for shouldSplit training pipeline.
+    """General process configuration for shouldSplit training.
 
     Attributes:
         random_state: Random seed for reproducible training.
-        primary_metric: Metric used for best-model selection.
         categorical_features: Categorical feature names.
         numeric_imputer_fill_value: Fill value for numeric imputer.
-        logistic_regression: Logistic Regression settings.
-        random_forest: Random Forest settings.
-        hist_gradient_boosting: Hist Gradient Boosting settings.
-        catboost: CatBoost settings.
+        merge_train_test_for_fit: Whether to fit models on merged train+test split.
+        optuna_n_trials: Number of Optuna trials for best-architecture tuning.
+        optuna_timeout_sec: Optional timeout for Optuna tuning in seconds.
+        objective_metric: Name of optimization metric.
     """
 
     random_state: int = 42
-    primary_metric: str = "accuracy"
     categorical_features: list[str] = Field(default_factory=lambda: ["source_mc_id"])
     numeric_imputer_fill_value: float = 0.0
-    logistic_regression: LogisticRegressionConfig = Field(default_factory=LogisticRegressionConfig)
-    random_forest: RandomForestConfig = Field(default_factory=RandomForestConfig)
-    hist_gradient_boosting: HistGradientBoostingConfig = Field(default_factory=HistGradientBoostingConfig)
-    catboost: CatBoostConfig = Field(default_factory=CatBoostConfig)
+    merge_train_test_for_fit: bool = True
+    optuna_n_trials: int = 25
+    optuna_timeout_sec: int | None = None
+    objective_metric: str = "ratio_abs_delta"
 
     @field_validator("random_state")
     @classmethod
@@ -145,23 +39,19 @@ class ShouldSplitTrainingConfig(BaseModel):
             raise ValueError("random_state must be non-negative")
         return value
 
-    @field_validator("primary_metric")
+    @field_validator("optuna_n_trials")
     @classmethod
-    def validate_primary_metric(cls, value: str) -> str:
-        if value.strip() != "accuracy":
-            raise ValueError("Only accuracy is supported as primary_metric for now")
+    def validate_optuna_n_trials(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("optuna_n_trials must be positive")
         return value
 
-    @model_validator(mode="after")
-    def validate_models_enabled(self) -> ShouldSplitTrainingConfig:
-        if not (
-            self.logistic_regression.enabled
-            or self.random_forest.enabled
-            or self.hist_gradient_boosting.enabled
-            or self.catboost.enabled
-        ):
-            raise ValueError("At least one model must be enabled")
-        return self
+    @field_validator("objective_metric")
+    @classmethod
+    def validate_objective_metric(cls, value: str) -> str:
+        if value.strip() != "ratio_abs_delta":
+            raise ValueError("Only ratio_abs_delta objective metric is supported")
+        return value
 
 
 class ShouldSplitCliDefaultsConfig(BaseModel):

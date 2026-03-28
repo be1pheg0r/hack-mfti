@@ -16,6 +16,7 @@ COMPLEX_MARKERS: Final[tuple[str, ...]] = (
 )
 
 TURNKEY_SOURCE_TITLE: Final[str] = "Ремонт квартир и домов под ключ"
+GT_SHOULD_SPLIT_RATIO: Final[float] = 0.371
 
 MANDATORY_TEXT_FEATURES: Final[tuple[str, ...]] = (
 	"description_word_count",

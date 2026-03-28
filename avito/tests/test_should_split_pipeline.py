@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import joblib
 from pathlib import Path
+
+import joblib
 import pandas as pd
 import pytest
 
@@ -121,9 +122,17 @@ def test_train_should_split_models_smoke() -> None:
 
     result = train_should_split_models(df=df, include_embeddings=False)
 
-    assert result.model_name in {"logistic_regression", "random_forest", "hist_gradient_boosting", "catboost"}
-    assert 0.0 <= result.val_metrics["accuracy"] <= 1.0
-    assert 0.0 <= result.test_metrics["accuracy"] <= 1.0
+    assert result.model_name in {
+        "logistic_regression",
+        "random_forest",
+        "hist_gradient_boosting",
+        "catboost",
+        "xgboost",
+        "lightgbm",
+    }
+    assert 0.0 <= result.gt_should_split_ratio <= 1.0
+    assert 0.0 <= result.model_should_split_ratio <= 1.0
+    assert abs(result.ratio_delta) == pytest.approx(result.ratio_abs_delta)
     assert len(result.model_comparison_records) > 0
 
 
