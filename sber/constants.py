@@ -1,0 +1,8 @@
+from __future__ import annotations
+
+DEFAULT_PROBE_LAYERS: list[int] = [0, 4, 8, 12, 16, 20, 24, 28, 31]
+DEFAULT_LOGIT_EPSILON: float = 1e-10
+DEFAULT_ATTENTION_EPSILON: float = 1e-10
+DEFAULT_ENABLE_ATTENTION_ENTROPY: bool = True
+DEFAULT_ENABLE_MOE_ROUTING: bool = True
+DEFAULT_OUTPUT_ATTENTIONS: bool = True

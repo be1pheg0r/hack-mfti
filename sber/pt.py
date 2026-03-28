@@ -1,0 +1,548 @@
+from __future__ import annotations
+
+from typing import *
+
+import torch
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from common.files import read_yaml
+from common.logger import LoggerConfig, setup_logger
+from common.paths import PathLike
+from sber.constants import (
+    DEFAULT_ATTENTION_EPSILON,
+    DEFAULT_ENABLE_ATTENTION_ENTROPY,
+    DEFAULT_ENABLE_MOE_ROUTING,
+    DEFAULT_LOGIT_EPSILON,
+    DEFAULT_OUTPUT_ATTENTIONS,
+    DEFAULT_PROBE_LAYERS,
+)
+
+LOGGER = setup_logger(
+    LoggerConfig(name="sber-pt", level="INFO", prefix="[SBER/PT] ")
+)
+
+
+class FeatureExtractorConfig(BaseModel):
+    """Конфигурация извлечения фичей из языковой модели.
+
+    Attributes:
+        probe_layers: Индексы слоев для снятия проб.
+        logit_epsilon: Малое число для стабильных логарифмов по логитам.
+        attention_epsilon: Малое число для стабильных логарифмов по attention.
+        enable_attention_entropy: Флаг расчета attention entropy фичей.
+        enable_moe_routing: Флаг расчета routing фичей для MoE.
+        use_output_attentions: Флаг передачи output_attentions=True в forward.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    probe_layers: list[int] = Field(default_factory=lambda: list(DEFAULT_PROBE_LAYERS))
+    logit_epsilon: float = DEFAULT_LOGIT_EPSILON
+    attention_epsilon: float = DEFAULT_ATTENTION_EPSILON
+    enable_attention_entropy: bool = DEFAULT_ENABLE_ATTENTION_ENTROPY
+    enable_moe_routing: bool = DEFAULT_ENABLE_MOE_ROUTING
+    use_output_attentions: bool = DEFAULT_OUTPUT_ATTENTIONS
+
+    @field_validator("probe_layers")
+    @classmethod
+    def validate_probe_layers(cls, value: list[int]) -> list[int]:
+        """Проверяет, что список probe-слоев корректный."""
+        normalized_layers: list[int] = sorted(set(value))
+        if not normalized_layers:
+            raise ValueError("Список probe_layers не может быть пустым")
+        if normalized_layers[0] < 0:
+            raise ValueError("Индексы слоев должны быть неотрицательными")
+        return normalized_layers
+
+    @field_validator("logit_epsilon", "attention_epsilon")
+    @classmethod
+    def validate_epsilon(cls, value: float) -> float:
+        """Проверяет, что epsilon положительный."""
+        if value <= 0.0:
+            raise ValueError("Epsilon должен быть положительным")
+        return value
+
+    @classmethod
+    def from_yaml(cls, fpath: PathLike) -> FeatureExtractorConfig:
+        """Создает конфиг из YAML-файла.
+
+        Args:
+            fpath: Путь к YAML-файлу.
+
+        Returns:
+            Валидированный конфиг.
+        """
+        raw_data: Any = read_yaml(fpath)
+        if not isinstance(raw_data, dict):
+            raise ValueError("YAML-конфиг должен быть словарем")
+        payload: Any = raw_data.get("feature_extractor", raw_data)
+        if not isinstance(payload, dict):
+            raise ValueError("Секция feature_extractor должна быть словарем")
+        return cls.model_validate(payload)
+
+
+class FeatureExtractorInput(BaseModel):
+    """Входные тензоры для извлечения фичей.
+
+    Attributes:
+        logits: Логиты модели формы [batch, seq_len, vocab_size].
+        input_ids: Токены формы [batch, seq_len].
+        answer_start: Индекс начала токенов ответа.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    logits: torch.Tensor
+    input_ids: torch.Tensor
+    answer_start: int
+
+    @model_validator(mode="after")
+    def validate_shapes(self) -> FeatureExtractorInput:
+        """Проверяет согласованность входных тензоров."""
+        if self.logits.ndim != 3:
+            raise ValueError("Ожидается logits формы [batch, seq_len, vocab_size]")
+        if self.input_ids.ndim != 2:
+            raise ValueError("Ожидается input_ids формы [batch, seq_len]")
+        if self.logits.shape[0] != self.input_ids.shape[0]:
+            raise ValueError("batch размер logits и input_ids должен совпадать")
+        if self.logits.shape[1] != self.input_ids.shape[1]:
+            raise ValueError("seq_len logits и input_ids должен совпадать")
+        if self.answer_start <= 0:
+            raise ValueError("answer_start должен быть > 0")
+        if self.answer_start >= self.input_ids.shape[1]:
+            raise ValueError("answer_start должен быть меньше seq_len")
+        return self
+
+
+class FeatureGroups(BaseModel):
+    """Группы фичей для downstream-классификатора.
+
+    Attributes:
+        uncertainty: Статистики неопределенности по токенам ответа.
+        internal_scalars: Внутренние статистики по выбранным слоям.
+        probe_vec: Вектор представления ответа после mean pooling по слоям и токенам.
+        attention_entropy: Энтропийные attention-фичи.
+        entropy_drops: Падения logit-lens entropy между соседними probe-слоями.
+        moe_routing: Агрегированные routing-фичи для MoE.
+    """
+
+    uncertainty: list[float]
+    internal_scalars: list[float]
+    probe_vec: list[float]
+    attention_entropy: list[float]
+    entropy_drops: list[float]
+    moe_routing: list[float]
+
+
+class LLMFeatureExtractor:
+    """Извлекает признаки галлюцинаций из внутреннего состояния LLM."""
+
+    def __init__(self, model: Any, config: FeatureExtractorConfig | None = None) -> None:
+        """Инициализирует экстрактор.
+
+        Args:
+            model: Causal LM модель с `model.layers`, `model.norm` и `lm_head`.
+            config: Настройки извлечения фичей.
+        """
+        self.model: Any = model
+        self.config: FeatureExtractorConfig = config or FeatureExtractorConfig()
+        self._hooks: list[Any] = []
+        self._hidden: dict[str, torch.Tensor] = {}
+
+    @classmethod
+    def from_yaml(cls, model: Any, fpath: PathLike) -> LLMFeatureExtractor:
+        """Создает экстрактор по YAML-конфигу.
+
+        Args:
+            model: Causal LM модель.
+            fpath: Путь к YAML-конфигу.
+
+        Returns:
+            Готовый экстрактор.
+        """
+        return cls(model=model, config=FeatureExtractorConfig.from_yaml(fpath=fpath))
+
+    def _extract_tensor(self, output: Any) -> torch.Tensor | None:
+        """Извлекает тензор из выхода хука."""
+        if isinstance(output, torch.Tensor):
+            return output
+        if isinstance(output, tuple):
+            for element in output:
+                if isinstance(element, torch.Tensor):
+                    return element
+        return None
+
+    def _extract_attention(self, output: Any) -> torch.Tensor | None:
+        """Извлекает тензор attention weights из выхода self_attn."""
+        if isinstance(output, tuple):
+            for element in output:
+                if isinstance(element, torch.Tensor) and element.ndim >= 4:
+                    return element
+        return None
+
+    def _resolve_moe_router_module(self, layer: Any) -> Any | None:
+        """Ищет модуль роутинга экспертов в слое, если он есть."""
+        mlp: Any | None = getattr(layer, "mlp", None)
+        if mlp is None:
+            return None
+
+        for attr_name in ["gate", "router", "router_gate", "moe_gate"]:
+            candidate: Any | None = getattr(mlp, attr_name, None)
+            if candidate is not None and hasattr(candidate, "register_forward_hook"):
+                return candidate
+
+        named_modules: list[tuple[str, Any]] = list(getattr(mlp, "named_modules", lambda: [])())
+        for module_name, module in named_modules:
+            lowered: str = module_name.lower()
+            if ("router" in lowered or lowered.endswith(".gate") or lowered == "gate") and hasattr(
+                module, "register_forward_hook"
+            ):
+                return module
+        return None
+
+    def attach(self) -> None:
+        """Регистрирует forward-hooks на hidden states, attention и MoE routing."""
+        self._hidden.clear()
+        layers: Any = self.model.model.layers
+
+        for layer_idx in self.config.probe_layers:
+            layer = layers[layer_idx]
+            layer_key: str = f"layer_{layer_idx}"
+
+            def make_hidden_hook(key: str) -> Callable[[Any, Any, Any], None]:
+                def hidden_hook(_module: Any, _input: Any, output: Any) -> None:
+                    hidden_tensor: torch.Tensor | None = self._extract_tensor(output)
+                    if hidden_tensor is not None:
+                        self._hidden[key] = hidden_tensor.detach()
+
+                return hidden_hook
+
+            self._hooks.append(layer.register_forward_hook(make_hidden_hook(layer_key)))
+
+            if self.config.enable_attention_entropy:
+                attn_module: Any | None = getattr(layer, "self_attn", None)
+                if attn_module is not None and hasattr(attn_module, "register_forward_hook"):
+                    attn_key: str = f"attn_{layer_idx}"
+
+                    def make_attn_hook(key: str) -> Callable[[Any, Any, Any], None]:
+                        def attn_hook(_module: Any, _input: Any, output: Any) -> None:
+                            attention_tensor: torch.Tensor | None = self._extract_attention(output)
+                            if attention_tensor is not None:
+                                self._hidden[key] = attention_tensor.detach()
+
+                        return attn_hook
+
+                    self._hooks.append(attn_module.register_forward_hook(make_attn_hook(attn_key)))
+
+            if self.config.enable_moe_routing:
+                router_module: Any | None = self._resolve_moe_router_module(layer)
+                if router_module is not None:
+                    moe_key: str = f"moe_{layer_idx}"
+
+                    def make_moe_hook(key: str) -> Callable[[Any, Any, Any], None]:
+                        def moe_hook(_module: Any, _input: Any, output: Any) -> None:
+                            route_tensor: torch.Tensor | None = self._extract_tensor(output)
+                            if route_tensor is not None:
+                                self._hidden[key] = route_tensor.detach()
+
+                        return moe_hook
+
+                    self._hooks.append(router_module.register_forward_hook(make_moe_hook(moe_key)))
+
+    def detach(self) -> None:
+        """Удаляет все зарегистрированные hooks."""
+        for hook in self._hooks:
+            hook.remove()
+        self._hooks.clear()
+
+    def __enter__(self) -> LLMFeatureExtractor:
+        """Включает hooks в контекстном менеджере."""
+        self.attach()
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        """Выключает hooks в контекстном менеджере."""
+        self.detach()
+
+    def forward(self, token_ids: torch.Tensor) -> Any:
+        """Выполняет forward pass модели с нужными флагами.
+
+        Args:
+            token_ids: Входные токены формы [batch, seq_len].
+
+        Returns:
+            Выход модели.
+        """
+        with torch.no_grad():
+            if self.config.use_output_attentions and self.config.enable_attention_entropy:
+                try:
+                    return self.model(token_ids, output_attentions=True)
+                except TypeError:
+                    LOGGER.warning("Модель не поддерживает output_attentions, продолжаю без attention-выходов")
+            return self.model(token_ids)
+
+    def _compute_uncertainty_features(
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        answer_start: int,
+    ) -> list[float]:
+        """Считает uncertainty фичи по токенам ответа."""
+        seq_len: int = int(input_ids.shape[1])
+        n_answer_tokens: int = seq_len - answer_start
+
+        answer_logits: torch.Tensor = logits[0, answer_start - 1 : seq_len - 1, :].float()
+        answer_ids: torch.Tensor = input_ids[0, answer_start:seq_len]
+        log_probs: torch.Tensor = torch.log_softmax(answer_logits, dim=-1)
+        token_log_probs: torch.Tensor = log_probs.gather(1, answer_ids.unsqueeze(1)).squeeze(-1)
+
+        probs: torch.Tensor = torch.softmax(answer_logits, dim=-1)
+        entropy: torch.Tensor = -(probs * torch.log(probs + self.config.logit_epsilon)).sum(dim=-1)
+        top1: torch.Tensor = probs.max(dim=-1).values
+        top5: torch.Tensor = probs.topk(min(5, int(probs.shape[-1])), dim=-1).values.sum(dim=-1)
+
+        token_std: float = float(token_log_probs.std(unbiased=False).item()) if n_answer_tokens > 1 else 0.0
+        entropy_std: float = float(entropy.std(unbiased=False).item()) if n_answer_tokens > 1 else 0.0
+
+        return [
+            float(token_log_probs.mean().item()),
+            float(token_log_probs.min().item()),
+            float(token_log_probs.max().item()),
+            token_std,
+            float(entropy.mean().item()),
+            float(entropy.max().item()),
+            entropy_std,
+            float(torch.exp(-token_log_probs.mean()).item()),
+            float(n_answer_tokens),
+            float(token_log_probs[0].item()),
+            float(top1.mean().item()),
+            float(top5.mean().item()),
+        ]
+
+    def _compute_internal_and_probe(
+        self,
+        answer_start: int,
+        seq_len: int,
+    ) -> tuple[list[float], list[float], list[float]]:
+        """Считает internal скаляры, probe вектор и entropy drops."""
+        internal_scalars: list[float] = []
+        probe_vectors: list[torch.Tensor] = []
+        logit_lens_entropies: list[float] = []
+
+        for layer_idx in self.config.probe_layers:
+            hidden_key: str = f"layer_{layer_idx}"
+            if hidden_key not in self._hidden:
+                raise ValueError(f"Не найден hidden state для слоя {layer_idx}")
+
+            hidden_states: torch.Tensor = self._hidden[hidden_key][0]
+            answer_hidden: torch.Tensor = hidden_states[answer_start:seq_len]
+            answer_mean: torch.Tensor = answer_hidden.mean(dim=0)
+            probe_vectors.append(answer_mean)
+
+            internal_scalars.append(float(hidden_states[answer_start - 1].norm().item()))
+            internal_scalars.append(float(answer_hidden.norm(dim=-1).mean().item()))
+
+            answer_plus_prompt_hidden: torch.Tensor = hidden_states[answer_start - 1 : seq_len - 1].unsqueeze(0)
+            with torch.no_grad():
+                layer_logits: torch.Tensor = self.model.lm_head(self.model.model.norm(answer_plus_prompt_hidden)).float()
+            layer_probs: torch.Tensor = torch.softmax(layer_logits[0], dim=-1)
+            layer_entropy: torch.Tensor = -(layer_probs * torch.log(layer_probs + self.config.logit_epsilon)).sum(dim=-1)
+            mean_layer_entropy: float = float(layer_entropy.mean().item())
+            internal_scalars.append(mean_layer_entropy)
+            logit_lens_entropies.append(mean_layer_entropy)
+
+        pooled_probe: torch.Tensor = torch.stack(probe_vectors, dim=0).mean(dim=0)
+
+        entropy_drops: list[float] = []
+        for index in range(len(logit_lens_entropies) - 1):
+            drop_value: float = logit_lens_entropies[index] - logit_lens_entropies[index + 1]
+            entropy_drops.append(float(drop_value))
+
+        return internal_scalars, [float(x) for x in pooled_probe.cpu().float().tolist()], entropy_drops
+
+    def _compute_attention_features(self, answer_start: int, seq_len: int) -> list[float]:
+        """Считает attention entropy фичи по probe-слоям."""
+        if not self.config.enable_attention_entropy:
+            return []
+
+        attention_features: list[float] = []
+        for layer_idx in self.config.probe_layers:
+            attention_key: str = f"attn_{layer_idx}"
+            if attention_key not in self._hidden:
+                attention_features.extend([0.0, 0.0, 0.0])
+                continue
+
+            attention_tensor: torch.Tensor = self._hidden[attention_key]
+            if attention_tensor.ndim == 4:
+                selected_attention: torch.Tensor = attention_tensor[0]
+            elif attention_tensor.ndim == 3:
+                selected_attention = attention_tensor
+            else:
+                attention_features.extend([0.0, 0.0, 0.0])
+                continue
+
+            answer_attention: torch.Tensor = selected_attention[:, answer_start:seq_len, :]
+            entropy: torch.Tensor = -(
+                answer_attention
+                * torch.log(answer_attention + self.config.attention_epsilon)
+            ).sum(dim=-1)
+
+            entropy_std: float = (
+                float(entropy.std(unbiased=False).item())
+                if entropy.numel() > 1
+                else 0.0
+            )
+            attention_features.extend(
+                [
+                    float(entropy.mean().item()),
+                    float(entropy.max().item()),
+                    entropy_std,
+                ]
+            )
+
+        return attention_features
+
+    def _routing_tensor_to_answer_view(
+        self,
+        routing_tensor: torch.Tensor,
+        answer_start: int,
+        seq_len: int,
+    ) -> torch.Tensor | None:
+        """Приводит роутинг-тензор к форме [answer_tokens, num_experts]."""
+        if routing_tensor.ndim == 3:
+            if routing_tensor.shape[0] <= 0:
+                return None
+            return routing_tensor[0, answer_start:seq_len, :]
+
+        if routing_tensor.ndim == 2:
+            return routing_tensor[answer_start:seq_len, :]
+
+        if routing_tensor.ndim > 3:
+            last_dim: int = int(routing_tensor.shape[-1])
+            flattened: torch.Tensor = routing_tensor.reshape(-1, last_dim)
+            answer_len: int = seq_len - answer_start
+            if flattened.shape[0] < answer_len:
+                return None
+            return flattened[:answer_len, :]
+
+        return None
+
+    def _compute_moe_features(self, answer_start: int, seq_len: int) -> list[float]:
+        """Считает агрегированные routing-фичи для MoE-моделей."""
+        if not self.config.enable_moe_routing:
+            return []
+
+        mean_top_prob_by_layer: list[float] = []
+        std_top_prob_by_layer: list[float] = []
+        mean_entropy_by_layer: list[float] = []
+        std_entropy_by_layer: list[float] = []
+        active_ratio_by_layer: list[float] = []
+
+        for layer_idx in self.config.probe_layers:
+            moe_key: str = f"moe_{layer_idx}"
+            if moe_key not in self._hidden:
+                continue
+
+            routing_tensor: torch.Tensor = self._hidden[moe_key].float()
+            routing_answer: torch.Tensor | None = self._routing_tensor_to_answer_view(
+                routing_tensor=routing_tensor,
+                answer_start=answer_start,
+                seq_len=seq_len,
+            )
+            if routing_answer is None or routing_answer.numel() == 0:
+                continue
+
+            routing_probs: torch.Tensor = torch.softmax(routing_answer, dim=-1)
+            top_probs: torch.Tensor = routing_probs.max(dim=-1).values
+            routing_entropy: torch.Tensor = -(
+                routing_probs
+                * torch.log(routing_probs + self.config.logit_epsilon)
+            ).sum(dim=-1)
+            top_experts: torch.Tensor = routing_probs.argmax(dim=-1)
+            num_experts: int = int(routing_probs.shape[-1])
+            active_ratio: float = float(top_experts.unique().numel() / max(num_experts, 1))
+
+            mean_top_prob_by_layer.append(float(top_probs.mean().item()))
+            std_top_prob_by_layer.append(float(top_probs.std(unbiased=False).item()))
+            mean_entropy_by_layer.append(float(routing_entropy.mean().item()))
+            std_entropy_by_layer.append(float(routing_entropy.std(unbiased=False).item()))
+            active_ratio_by_layer.append(active_ratio)
+
+        if not mean_top_prob_by_layer:
+            return [0.0] * 10
+
+        def aggregate(values: list[float]) -> tuple[float, float]:
+            tensor_values: torch.Tensor = torch.tensor(values, dtype=torch.float32)
+            return float(tensor_values.mean().item()), float(tensor_values.std(unbiased=False).item())
+
+        mean_top_prob_stats: tuple[float, float] = aggregate(mean_top_prob_by_layer)
+        std_top_prob_stats: tuple[float, float] = aggregate(std_top_prob_by_layer)
+        mean_entropy_stats: tuple[float, float] = aggregate(mean_entropy_by_layer)
+        std_entropy_stats: tuple[float, float] = aggregate(std_entropy_by_layer)
+        active_ratio_stats: tuple[float, float] = aggregate(active_ratio_by_layer)
+
+        return [
+            mean_top_prob_stats[0],
+            mean_top_prob_stats[1],
+            std_top_prob_stats[0],
+            std_top_prob_stats[1],
+            mean_entropy_stats[0],
+            mean_entropy_stats[1],
+            std_entropy_stats[0],
+            std_entropy_stats[1],
+            active_ratio_stats[0],
+            active_ratio_stats[1],
+        ]
+
+    def extract(
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        answer_start: int,
+    ) -> FeatureGroups:
+        """Извлекает полный набор фичей из результатов forward pass.
+
+        Args:
+            logits: Логиты модели формы [batch, seq_len, vocab_size].
+            input_ids: Токены формы [batch, seq_len].
+            answer_start: Индекс начала токенов ответа.
+
+        Returns:
+            Набор фичей по группам.
+        """
+        validated_input: FeatureExtractorInput = FeatureExtractorInput(
+            logits=logits,
+            input_ids=input_ids,
+            answer_start=answer_start,
+        )
+
+        seq_len: int = int(validated_input.input_ids.shape[1])
+        uncertainty_features: list[float] = self._compute_uncertainty_features(
+            logits=validated_input.logits,
+            input_ids=validated_input.input_ids,
+            answer_start=validated_input.answer_start,
+        )
+        internal_scalars, probe_vector, entropy_drops = self._compute_internal_and_probe(
+            answer_start=validated_input.answer_start,
+            seq_len=seq_len,
+        )
+        attention_features: list[float] = self._compute_attention_features(
+            answer_start=validated_input.answer_start,
+            seq_len=seq_len,
+        )
+        moe_features: list[float] = self._compute_moe_features(
+            answer_start=validated_input.answer_start,
+            seq_len=seq_len,
+        )
+
+        self._hidden.clear()
+
+        return FeatureGroups(
+            uncertainty=uncertainty_features,
+            internal_scalars=internal_scalars,
+            probe_vec=probe_vector,
+            attention_entropy=attention_features,
+            entropy_drops=entropy_drops,
+            moe_routing=moe_features,
+        )
+
