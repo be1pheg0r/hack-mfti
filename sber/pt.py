@@ -6,7 +6,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from common.files import read_yaml
-from common.logger import LoggerConfig, setup_logger
+from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike
 from sber.constants import (
     DEFAULT_ATTENTION_EPSILON,
@@ -15,10 +15,6 @@ from sber.constants import (
     DEFAULT_LOGIT_EPSILON,
     DEFAULT_OUTPUT_ATTENTIONS,
     DEFAULT_PROBE_LAYERS,
-)
-
-LOGGER = setup_logger(
-    LoggerConfig(name="sber-pt", level="INFO", prefix="[SBER/PT] ")
 )
 
 
@@ -278,7 +274,7 @@ class LLMFeatureExtractor:
                 try:
                     return self.model(token_ids, output_attentions=True)
                 except TypeError:
-                    LOGGER.warning("Модель не поддерживает output_attentions, продолжаю без attention-выходов")
+                    logger.warning("Модель не поддерживает output_attentions, продолжаю без attention-выходов")
             return self.model(token_ids)
 
     def _compute_uncertainty_features(

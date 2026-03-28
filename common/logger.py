@@ -61,6 +61,7 @@ class ProjectLoggerRegistry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG", prefix="[MISTRAL 🇫🇷] ")
+    sber_pt_hooks: LoggerConfig = LoggerConfig(name="sber-pt-hooks", level="DEBUG", prefix="[SBER-HOOKS 🪝] ")
 
 
 class ColoredFormatter(logging.Formatter):
@@ -153,6 +154,7 @@ def get_project_logger(config_name: str) -> logging.Logger:
 
 
 MISTRAL_LOGGER: logging.Logger = get_project_logger("mistral_call")
+SBER_HOOKS_LOGGER: logging.Logger = get_project_logger("sber_pt_hooks")
 
 
 def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:

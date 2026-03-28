@@ -1,0 +1,8 @@
+feature_extractor:
+  probe_layers: [0, 4, 8, 12, 16, 20, 24, 28, 31]
+  logit_epsilon: 1e-10
+  attention_epsilon: 1e-10
+  enable_attention_entropy: true
+  enable_moe_routing: true
+  use_output_attentions: true
+
