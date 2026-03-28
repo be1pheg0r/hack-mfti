@@ -56,11 +56,17 @@ class ProjectLoggerRegistry(BaseModel):
 
     Attributes:
         mistral_call: Логгер для безопасного вызова функций в common.mistral.
+        sber_pt_hooks: Логгер для снятия проб со слоев в кейсе Sber.
+        jupyter_notebooks: Логгер для ноутбуков проекта.
+        sber_datasets: Логгер для загрузки и подготовки датасетов Sber.
     """
 
     model_config = ConfigDict(frozen=True)
 
     mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG", prefix="[MISTRAL 🇫🇷] ")
+    sber_pt_hooks: LoggerConfig = LoggerConfig(name="sber-pt-hooks", level="DEBUG", prefix="[SBER-HOOKS 🪝] ")
+    jupyter_notebooks: LoggerConfig = LoggerConfig(name="jupyter-notebooks", level="INFO", prefix="[JUPYTER 📓] ")
+    sber_datasets: LoggerConfig = LoggerConfig(name="sber-datasets", level="INFO", prefix="[SBER-DATASETS 📦] ")
 
 
 class ColoredFormatter(logging.Formatter):
@@ -153,6 +159,9 @@ def get_project_logger(config_name: str) -> logging.Logger:
 
 
 MISTRAL_LOGGER: logging.Logger = get_project_logger("mistral_call")
+SBER_HOOKS_LOGGER: logging.Logger = get_project_logger("sber_pt_hooks")
+JUPYTER_LOGGER: logging.Logger = get_project_logger("jupyter_notebooks")
+SBER_DATASETS_LOGGER: logging.Logger = get_project_logger("sber_datasets")
 
 
 def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:
