@@ -219,7 +219,7 @@ def load_tape_dataset(
     return load_dataset(
         config.tape_repo,
         name=tape_name,
-        trust_remote_code=True,
+        # trust_remote_code=True,
         cache_dir=str(cache_dir),
     )["train"]
 
