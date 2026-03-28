@@ -4,6 +4,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 from typing import *
+import platform
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -117,13 +118,8 @@ def build_curl_download_command(
     Returns:
         Команда для subprocess.run.
     """
-    return [
-        "curl.exe",
-        "-L",
-        "-o",
-        str(archive_fpath),
-        url,
-    ]
+    curl = "curl.exe" if platform.system() == "Windows" else "curl"
+    return [curl, "-L", "-o", str(archive_fpath), url]
 
 
 def download_archive(command: list[str]) -> None:
