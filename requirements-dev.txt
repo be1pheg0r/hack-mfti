@@ -7,5 +7,6 @@ matplotlib
 seaborn
 datasets==2.20.0
 pyarrow==15.0.0
+numpy==1.26.4
 umap-learn
 rapidfuzz
