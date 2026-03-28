@@ -6,3 +6,11 @@ DEFAULT_ATTENTION_EPSILON: float = 1e-10
 DEFAULT_ENABLE_ATTENTION_ENTROPY: bool = True
 DEFAULT_ENABLE_MOE_ROUTING: bool = True
 DEFAULT_OUTPUT_ATTENTIONS: bool = True
+
+DEFAULT_RUBQ_DATASET_SLUG: str = "valentinbiryukov/rubq-20"
+DEFAULT_RUBQ_ARCHIVE_NAME: str = "rubq-20.zip"
+DEFAULT_RUBQ_JSON_NAME: str = "RuBQ_2.0_dev.json"
+DEFAULT_TAPE_DATASET_REPO: str = "RussianNLP/tape"
+DEFAULT_TAPE_CACHE_SUBDIR: str = "tape"
+DEFAULT_DATASET_NAMES: list[str] = ["rubq-20", "tape-chegeka.raw", "tape-multiq.raw"]
+DEFAULT_KAGGLE_API_URL_TEMPLATE: str = "https://www.kaggle.com/api/v1/datasets/download/{dataset_slug}"
