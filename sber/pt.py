@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import *
 
 import torch
+from torch import nn
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from common.files import read_yaml
@@ -130,7 +131,7 @@ class FeatureGroups(BaseModel):
     moe_routing: list[float]
 
 
-class LLMFeatureExtractor:
+class LLMFeatureExtractor(nn.Module):
     """Извлекает признаки галлюцинаций из внутреннего состояния LLM."""
 
     def __init__(self, model: Any, config: FeatureExtractorConfig | None = None) -> None:
@@ -140,6 +141,7 @@ class LLMFeatureExtractor:
             model: Causal LM модель с `model.layers`, `model.norm` и `lm_head`.
             config: Настройки извлечения фичей.
         """
+        super().__init__()
         self.model: Any = model
         self.config: FeatureExtractorConfig = config or FeatureExtractorConfig()
         self._hooks: list[Any] = []
@@ -567,7 +569,7 @@ class DummyFeatureModelConfig(BaseModel):
         return value
 
 
-class DummyFeatureModel:
+class DummyFeatureModel(nn.Module):
     """Генерирует случайные фичи в контракте FeatureGroups для тестов."""
 
     def __init__(
@@ -581,6 +583,7 @@ class DummyFeatureModel:
             config: Конфиг экстрактора, задающий размеры групп по слоям.
             dummy_config: Конфиг генерации случайных данных.
         """
+        super().__init__()
         self.config: FeatureExtractorConfig = config or FeatureExtractorConfig()
         self.dummy_config: DummyFeatureModelConfig = dummy_config or DummyFeatureModelConfig()
         self._generator: torch.Generator = torch.Generator()
@@ -649,3 +652,29 @@ class DummyFeatureModel:
             entropy_drops=self._sample_list(entropy_drops_size),
             moe_routing=self._sample_list(moe_size),
         )
+
+
+if __name__ == "__main__":
+    config = FeatureExtractorConfig(
+        probe_layers=[0, 1, 2, 3],
+        enable_attention_entropy=True,
+        enable_moe_routing=True,
+    )
+    dummy_config = DummyFeatureModelConfig(probe_dim=128, vocab_size=100, seed=123)
+    dummy_model = DummyFeatureModel(config=config, dummy_config=dummy_config)
+
+    input_ids: torch.Tensor = torch.randint(low=0, high=100, size=(1, 9), dtype=torch.long)
+    dummy_out: dict[str, torch.Tensor] = dummy_model.forward(input_ids)
+    features = dummy_model.extract(
+        logits=dummy_out["logits"],
+        input_ids=input_ids,
+        answer_start=3,
+    )
+
+    print("Uncertainty features:", features.uncertainty)
+    print("Internal scalars:", features.internal_scalars)
+    print("Probe vector:", features.probe_vec)
+    print("Attention entropy features:", features.attention_entropy)
+    print("Entropy drops:", features.entropy_drops)
+    print("MoE routing features:", features.moe_routing)
+
