@@ -11,7 +11,7 @@ from avito.config import AvitoCaseConfig
 from avito.classifier import train_should_split_models
 from avito.embeddings import EncoderConfig, SentenceTransformerEncoder
 from avito.features import ShouldSplitFeatureConfig
-from common.logger import LoggerConfig, setup_logger
+from common.logger import AVITO_SHOULD_SPLIT_LOGGER as logger
 from common.paths import get_avito_data_dpath, get_checkpoints_dpath
 
 
@@ -46,13 +46,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    logger = setup_logger(
-        LoggerConfig(
-            name="avito-should-split-train",
-            level="INFO",
-            prefix="[AVITO/SHOULD_SPLIT] ",
-        )
-    )
     args = _build_arg_parser().parse_args()
     case_config = AvitoCaseConfig.from_default_yaml()
 
