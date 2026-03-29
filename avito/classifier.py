@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-import warnings
 
 import numpy as np
 import optuna
@@ -354,10 +353,13 @@ def train_should_split_models(
     )
 
     preprocessor = _build_preprocessor(X, config=effective_training_config)
+    embedding_feature_count = int(sum(1 for column in X.columns if str(column).startswith("embedding_")))
     enabled_models_count = sum(1 for cfg in architecture_configs.values() if cfg.enabled)
     log_block_separator(logger)
     logger.info("Старт сравнения архитектур shouldSplit")
     logger.info(f"Кандидатов в сравнении: {enabled_models_count}")
+    logger.info(f"Целевая метрика: {effective_training_config.objective_metric}")
+    logger.info(f"Эмбеддинговых признаков в матрице: {embedding_feature_count}")
     log_block_separator(logger)
 
     model_rows: list[dict[str, float | str]] = []
@@ -415,7 +417,8 @@ def train_should_split_models(
 
     logger.info("Итог базового сравнения:")
     logger.info(
-        f"Лучшая архитектура до тюнинга: {best_model_name}; ratio_abs_delta={best_ratio_abs_delta:.6f}"
+        f"Лучшая архитектура до тюнинга: {best_model_name}; "
+        f"ratio_abs_delta={best_ratio_abs_delta:.6f}"
     )
 
     best_arch_config = architecture_configs[best_model_name]
@@ -446,7 +449,7 @@ def train_should_split_models(
                 fit_model_with_progress(pipeline, X_fit, y_fit, X_val)
             except Exception as fit_error:
                 logger.warning(f"Ошибка обучения во время trial: {fit_error}")
-                return float('inf')
+                return float("inf")
             val_pred = predict_with_clean_warnings(pipeline, X_val)
             _, _, ratio_abs_delta = _compute_ratio_metrics(val_pred)
             return ratio_abs_delta
@@ -514,7 +517,7 @@ def train_should_split_models(
         for row in comparison_records_raw
     ]
 
-    logger.info("Рейтинг архитектур по ratio_abs_delta:")
+    logger.info(f"Рейтинг архитектур по {effective_training_config.objective_metric}:")
     for rank, row in enumerate(comparison_records, start=1):
         logger.info(
             f"  #{rank} {row['model']}: "
