@@ -124,9 +124,14 @@ class AvitoCaseConfig(BaseModel):
 
     @classmethod
     def from_default_yaml(cls) -> AvitoCaseConfig:
-        """Создает конфиг из файла avito/config.yaml по умолчанию.
+        """Создает конфиг с дефолтными значениями.
+
+        Если файл avito/config.yaml существует, загружает его.
+        Если нет — использует встроенные дефолты.
 
         Returns:
             Распарсенная и провалидированная конфигурация кейса.
         """
-        return cls.model_validate({"config_path": DEFAULT_AVITO_CONFIG_FPATH})
+        if DEFAULT_AVITO_CONFIG_FPATH.exists():
+            return cls.model_validate({"config_path": DEFAULT_AVITO_CONFIG_FPATH})
+        return cls()
