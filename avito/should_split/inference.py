@@ -9,7 +9,12 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 from sklearn.pipeline import Pipeline
 
-from avito.features import ShouldSplitFeatureConfig, TextEncoderLike, append_embedding_features, extract_should_split_features
+from avito.should_split.features import (
+    ShouldSplitFeatureConfig,
+    TextEncoderLike,
+    append_embedding_features,
+    extract_should_split_features,
+)
 
 
 class ShouldSplitArtifact(BaseModel):

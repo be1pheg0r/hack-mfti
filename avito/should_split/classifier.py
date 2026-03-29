@@ -20,7 +20,7 @@ from xgboost import XGBClassifier
 
 from avito.config import ShouldSplitTrainingConfig
 from avito.constants import GT_SHOULD_SPLIT_RATIO
-from avito.features import ShouldSplitFeatureConfig, TextEncoderLike, build_training_matrix
+from avito.should_split.features import ShouldSplitFeatureConfig, TextEncoderLike, build_training_matrix
 from common.files import read_yaml
 from common.logger import (
     AVITO_SHOULD_SPLIT_LOGGER as logger,
@@ -53,7 +53,7 @@ class ShouldSplitModelConfigPaths:
 
 def get_should_split_model_config_paths() -> ShouldSplitModelConfigPaths:
     """Возвращает абсолютные пути к конфигам архитектур shouldSplit."""
-    config_dir = Path(__file__).resolve().parent / "configs" / "should_split"
+    config_dir = Path(__file__).resolve().parent.parent / "configs" / "should_split"
     return ShouldSplitModelConfigPaths(
         logistic_regression=config_dir / "logistic_regression.yaml",
         random_forest=config_dir / "random_forest.yaml",

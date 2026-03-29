@@ -6,9 +6,9 @@ import joblib
 import pandas as pd
 import pytest
 
-from avito.classifier import train_should_split_models
-from avito.features import append_embedding_features, build_training_matrix, extract_should_split_features
-from avito.inference import (
+from avito.should_split.classifier import train_should_split_models
+from avito.should_split.features import append_embedding_features, build_training_matrix, extract_should_split_features
+from avito.should_split.inference import (
     ShouldSplitArtifact,
     load_should_split_artifact,
     predict_should_split,
