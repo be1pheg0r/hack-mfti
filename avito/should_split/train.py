@@ -4,15 +4,15 @@ import argparse
 import json
 from pathlib import Path
 
-import joblib
 import pandas as pd
 
 from avito.config import AvitoCaseConfig
 from avito.should_split.classifier import train_should_split_models
 from avito.embeddings import EncoderConfig, SentenceTransformerEncoder
 from avito.should_split.features import ShouldSplitFeatureConfig
+from common.checkpoints import resolve_checkpoint_path, save_checkpoint
 from common.logger import AVITO_SHOULD_SPLIT_LOGGER as logger
-from common.paths import get_avito_data_dpath, get_checkpoints_dpath
+from common.paths import get_avito_checkpoints_dpath, get_avito_data_dpath
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -28,13 +28,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--artifact-path",
         type=str,
-        default=str(Path(get_checkpoints_dpath()) / case_config.should_split.cli_defaults.artifact_filename),
+        default=str(Path(get_avito_checkpoints_dpath()) / case_config.should_split.cli_defaults.artifact_filename),
         help="Путь для сохранения артефакта обученной модели.",
     )
     parser.add_argument(
         "--report-path",
         type=str,
-        default=str(Path(get_checkpoints_dpath()) / case_config.should_split.cli_defaults.report_filename),
+        default=str(Path(get_avito_checkpoints_dpath()) / case_config.should_split.cli_defaults.report_filename),
         help="Путь для сохранения JSON-отчета.",
     )
     return parser
@@ -66,8 +66,6 @@ def main() -> None:
         training_config=case_config.should_split.training,
     )
 
-    artifact_path = Path(args.artifact_path)
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_payload = {
         "best_model_name": result.model_name,
         "pipeline": result.pipeline,
@@ -80,11 +78,10 @@ def main() -> None:
         "with_embeddings": True,
         "feature_config": feature_config.model_dump(mode="json"),
     }
-    joblib.dump(artifact_payload, artifact_path)
+    artifact_path = save_checkpoint(artifact_payload, filename=Path(args.artifact_path))
     logger.info(f"Артефакт модели сохранен: {artifact_path}")
 
-    report_path = Path(args.report_path)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path = resolve_checkpoint_path(filename=Path(args.report_path))
     report_payload = {
         "best_model_name": result.model_name,
         "gt_should_split_ratio": result.gt_should_split_ratio,

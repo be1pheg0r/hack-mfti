@@ -8,10 +8,13 @@ PathLike = str | Path
 
 
 def fixdir(function: Callable[P, PathLike]) -> Callable[P, PathLike]:
-    """
-    Декоратор для создания директории, если она не существует.
-    :param function: Callable: Функция, возвращающая путь к директории.
-    :return: Callable: Обернутая функция.
+    """Декоратор, создающий директорию, если её ещё нет.
+
+    Args:
+        function: Функция, возвращающая путь к директории.
+
+    Returns:
+        Обернутая функция, создающая директорию перед возвратом пути.
     """
 
     @wraps(function)
@@ -24,10 +27,13 @@ def fixdir(function: Callable[P, PathLike]) -> Callable[P, PathLike]:
 
 
 def avito(function: Callable[P, PathLike]) -> Callable[P, PathLike]:
-    """
-    Декоратор для добавления префикса "avito" к пути.
-    :param function: Callable: Функция, возвращающая путь.
-    :return: Callable: Обернутая функция.
+    """Декоратор для добавления префикса "avito" к пути.
+
+    Args:
+        function: Функция, возвращающая путь.
+
+    Returns:
+        Обернутая функция.
     """
 
     @wraps(function)
@@ -37,10 +43,13 @@ def avito(function: Callable[P, PathLike]) -> Callable[P, PathLike]:
     return wrapper
 
 def sber(function: Callable[P, PathLike]) -> Callable[P, PathLike]:
-    """
-    Декоратор для добавления префикса "sber" к пути.
-    :param function: Callable: Функция, возвращающая путь.
-    :return: Callable: Обернутая функция.
+    """Декоратор для добавления префикса "sber" к пути.
+
+    Args:
+        function: Функция, возвращающая путь.
+
+    Returns:
+        Обернутая функция.
     """
 
     @wraps(function)
@@ -51,9 +60,10 @@ def sber(function: Callable[P, PathLike]) -> Callable[P, PathLike]:
 
 
 def get_project_root() -> PathLike:
-    """
-    Корневой каталог проекта.
-    :return: Path: Путь к корневому каталогу проекта.
+    """Возвращает корневой каталог проекта.
+
+    Returns:
+        Путь к корню проекта.
     """
     current_path: PathLike = Path(__file__).resolve().parent
     while not (current_path / ANCHOR).exists():
@@ -65,9 +75,10 @@ def get_project_root() -> PathLike:
 
 @fixdir
 def get_data_dpath() -> PathLike:
-    """
-    Каталог для хранения данных проекта.
-    :return: Path: Путь к каталогу данных проекта.
+    """Каталог для хранения данных проекта.
+
+    Returns:
+        Путь к каталогу данных проекта.
     """
     return get_project_root() / "data"
 
@@ -75,9 +86,10 @@ def get_data_dpath() -> PathLike:
 @fixdir
 @avito
 def get_avito_dpath() -> PathLike:
-    """
-    Каталог для сурсов для авито кейса.
-    :return: Path: Путь к каталогу сурсов для авито кейса.
+    """Каталог ресурсов для кейса Авито.
+
+    Returns:
+        Путь к каталогу ресурсов Авито.
     """
     return Path()
 
@@ -85,9 +97,10 @@ def get_avito_dpath() -> PathLike:
 @fixdir
 @sber
 def get_sber_dpath() -> PathLike:
-    """
-    Каталог для сурсов для сбер кейса.
-    :return: Path: Путь к каталогу сурсов для сбер кейса.
+    """Каталог ресурсов для кейса Сбер.
+
+    Returns:
+        Путь к каталогу ресурсов Сбер.
     """
     return Path()
 
@@ -95,9 +108,10 @@ def get_sber_dpath() -> PathLike:
 @fixdir
 @avito
 def get_avito_data_dpath() -> PathLike:
-    """
-    Каталог для данных для авито кейса.
-    :return: Path: Путь к каталогу данных для авито кейса.
+    """Каталог данных кейса Авито.
+
+    Returns:
+        Путь к каталогу данных Авито.
     """
     return Path() / "data"
 
@@ -105,9 +119,10 @@ def get_avito_data_dpath() -> PathLike:
 @fixdir
 @sber
 def get_sber_data_dpath() -> PathLike:
-    """
-    Каталог для данных для сбер кейса.
-    :return: Path: Путь к каталогу данных для сбер кейса.
+    """Каталог данных кейса Сбер.
+
+    Returns:
+        Путь к каталогу данных Сбер.
     """
     return Path() / "data"
 
@@ -115,18 +130,20 @@ def get_sber_data_dpath() -> PathLike:
 @fixdir
 @avito
 def get_avito_configs_dpath() -> PathLike:
-    """
-    Каталог для конфигурационных файлов для авито кейса.
-    :return: Path: Путь к каталогу конфигурационных файлов для авито кейса.
+    """Каталог конфигурационных файлов кейса Авито.
+
+    Returns:
+        Путь к каталогу конфигов Авито.
     """
     return Path() / "configs"
 
 @fixdir
 @sber
 def get_sber_configs_dpath() -> PathLike:
-    """
-    Каталог для конфигурационных файлов для сбер кейса.
-    :return: Path: Путь к каталогу конфигурационных файлов для сбер кейса.
+    """Каталог конфигурационных файлов кейса Сбер.
+
+    Returns:
+        Путь к каталогу конфигов Сбер.
     """
     return Path() / "configs"
 
@@ -134,58 +151,76 @@ def get_sber_configs_dpath() -> PathLike:
 @fixdir
 @avito
 def get_avito_cache_dpath() -> PathLike:
-    """
-    Каталог для хранения кэша для авито кейса.
-    :return: Path: Путь к каталогу кэша для авито кейса.
+    """Каталог для кэша кейса Авито.
+
+    Returns:
+        Путь к каталогу кэша Авито.
     """
     return Path() / ".cache"
 
 @fixdir
 @sber
 def get_sber_cache_dpath() -> PathLike:
-    """
-    Каталог для хранения кэша для сбер кейса.
-    :return: Path: Путь к каталогу кэша для сбер кейса.
+    """Каталог для кэша кейса Сбер.
+
+    Returns:
+        Путь к каталогу кэша Сбер.
     """
     return Path() / ".cache"
 
 
 @fixdir
-def get_avito_tests_dpath() -> PathLike:
+@avito
+def get_avito_checkpoints_dpath() -> PathLike:
+    """Каталог контрольных точек моделей кейса Авито.
+
+    Returns:
+        Путь к каталогу чекпоинтов Авито.
     """
-    Каталог для хранения тестов для авито кейса.
-    :return: Path: Путь к каталогу тестов для авито кейса.
+    return Path() / "checkpoints"
+
+
+@fixdir
+def get_avito_tests_dpath() -> PathLike:
+    """Каталог тестов кейса Авито.
+
+    Returns:
+        Путь к каталогу тестов Авито.
     """
     return get_avito_dpath() / "tests"
 
 @fixdir
 def get_sber_tests_dpath() -> PathLike:
-    """
-    Каталог для хранения тестов для сбер кейса.
-    :return: Path: Путь к каталогу тестов для сбер кейса.
+    """Каталог тестов кейса Сбер.
+
+    Returns:
+        Путь к каталогу тестов Сбер.
     """
     return get_sber_dpath() / "tests"
 
 
 @fixdir
 def get_secrets_dpath() -> PathLike:
-    """
-    Каталог для хранения секретов проекта.
-    :return: Path: Путь к каталогу секретов проекта.
+    """Каталог для секретов проекта.
+
+    Returns:
+        Путь к каталогу секретов.
     """
     return get_project_root() / ".credentials"
 
 def get_mistral_api_keys_fpath() -> PathLike:
-    """
-    Путь к файлу с API-ключами для Mistral.
-    :return: Path: Путь к файлу с API-ключами для Mistral.
+    """Путь к файлу с API-ключами для Mistral.
+
+    Returns:
+        Путь к файлу ключей.
     """
     return get_secrets_dpath() / "mistral_api_keys"
 
 @fixdir
 def get_checkpoints_dpath() -> PathLike:
-    """
-    Каталог для хранения контрольных точек моделей.
-    :return: Path: Путь к каталогу контрольных точек моделей.
+    """Глобальный каталог контрольных точек моделей.
+
+    Returns:
+        Путь к каталогу чекпоинтов.
     """
     return get_project_root() / "checkpoints"

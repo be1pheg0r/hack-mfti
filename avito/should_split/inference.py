@@ -18,13 +18,13 @@ from avito.should_split.features import (
 
 
 class ShouldSplitArtifact(BaseModel):
-    """Serialized shouldSplit model artifact contract.
+    """Контракт сериализованного артефакта модели shouldSplit.
 
     Attributes:
-        best_model_name: Name of selected model.
-        pipeline: Fitted sklearn pipeline.
-        with_embeddings: Whether embedding features were used.
-        feature_config: Feature extraction settings used in training.
+        best_model_name: Имя выбранной модели.
+        pipeline: Обученный sklearn-пайплайн.
+        with_embeddings: Использовались ли эмбеддинги при обучении.
+        feature_config: Конфигурация извлечения признаков, примененная при обучении.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -36,11 +36,11 @@ class ShouldSplitArtifact(BaseModel):
 
 
 class ShouldSplitInferenceResult(BaseModel):
-    """Inference output for shouldSplit predictions.
+    """Результат инференса для предсказаний shouldSplit.
 
     Attributes:
-        predictions: Binary shouldSplit predictions.
-        probabilities: Optional positive-class probabilities.
+        predictions: Бинарные предсказания shouldSplit.
+        probabilities: Опциональные вероятности положительного класса.
     """
 
     predictions: list[bool]
@@ -48,7 +48,7 @@ class ShouldSplitInferenceResult(BaseModel):
 
 
 def load_should_split_artifact(artifact_path: str | Path) -> ShouldSplitArtifact:
-    """Load serialized shouldSplit artifact from disk."""
+    """Загружает сериализованный артефакт shouldSplit с диска."""
     payload = joblib.load(artifact_path)
     if not isinstance(payload, dict):
         raise ValueError("Expected dict payload in shouldSplit artifact.")
@@ -93,16 +93,16 @@ def predict_should_split(
     encoder: TextEncoderLike | None = None,
     feature_config: ShouldSplitFeatureConfig | None = None,
 ) -> ShouldSplitInferenceResult:
-    """Predict shouldSplit labels for new rows.
+    """Делает предсказания shouldSplit для новых строк.
 
     Args:
-        df: Input DataFrame with at least description/source fields.
-        artifact: Loaded shouldSplit model artifact.
-        encoder: Encoder for embedding features when required.
-        feature_config: Optional explicit feature config override.
+        df: Входной DataFrame с полями description/source.
+        artifact: Загруженный артефакт модели shouldSplit.
+        encoder: Энкодер для эмбеддинговых признаков при необходимости.
+        feature_config: Явное переопределение конфигурации признаков.
 
     Returns:
-        Predictions and optional probabilities.
+        Предсказания и, при наличии, вероятности.
     """
     resolved_feature_config = _resolve_feature_config(artifact=artifact, feature_config=feature_config)
     features = extract_should_split_features(df=df, config=resolved_feature_config)
@@ -134,7 +134,7 @@ def predict_should_split_from_artifact(
     encoder: TextEncoderLike | None = None,
     feature_config: ShouldSplitFeatureConfig | None = None,
 ) -> ShouldSplitInferenceResult:
-    """Convenience wrapper to predict from serialized artifact path."""
+    """Упрощенная обертка для предсказаний по пути к сохраненному артефакту."""
     artifact = load_should_split_artifact(artifact_path)
     return predict_should_split(
         df=df,

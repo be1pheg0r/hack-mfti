@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from common.files import read_yaml
 from common.logger import LoggerConfig, setup_logger
-from common.paths import get_avito_configs_dpath, get_checkpoints_dpath, PathLike
+from common.paths import get_avito_checkpoints_dpath, get_avito_configs_dpath, PathLike
 
 
 DEFAULT_ENCODER_CONFIG_FPATH: Path = get_avito_configs_dpath() / "frida_base_config.yaml"
@@ -153,7 +153,7 @@ class EncoderConfig(BaseModel):
         """Возвращает путь к локальной директории модели внутри checkpoints."""
         if self.local_model_path is None:
             return None
-        return get_checkpoints_dpath() / self.local_model_path
+        return get_avito_checkpoints_dpath() / self.local_model_path
 
 
 class BaseEncoder(ABC):
