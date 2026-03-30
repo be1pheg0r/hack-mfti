@@ -7,3 +7,7 @@ matplotlib
 seaborn
 datasets
 umap-learn
+sentence-transformers
+torch
+accelerate
+rapidfuzz
