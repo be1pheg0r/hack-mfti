@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import joblib
 
 from avito.config import AvitoCaseConfig
 from avito.should_split.classifier import train_should_split_models
@@ -13,6 +14,27 @@ from avito.should_split.features import ShouldSplitFeatureConfig
 from common.checkpoints import resolve_checkpoint_path, save_checkpoint
 from common.logger import AVITO_SHOULD_SPLIT_LOGGER as logger
 from common.paths import get_avito_checkpoints_dpath, get_avito_data_dpath
+
+
+def _load_existing_best_metric(artifact_path: Path, report_path: Path) -> float | None:
+    """Возвращает ratio_abs_delta из уже сохраненного артефакта/репорта, если он есть."""
+    for path, loader in (
+        (artifact_path, "joblib"),
+        (report_path, "json"),
+    ):
+        if not path.exists():
+            continue
+        try:
+            if loader == "joblib":
+                payload = joblib.load(path)
+            else:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            metric = payload.get("ratio_abs_delta")
+            if isinstance(metric, (int, float)):
+                return float(metric)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Не удалось прочитать {path}: {exc}")
+    return None
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -66,6 +88,19 @@ def main() -> None:
         training_config=case_config.should_split.training,
     )
 
+    artifact_path = resolve_checkpoint_path(filename=Path(args.artifact_path))
+    report_path = resolve_checkpoint_path(filename=Path(args.report_path))
+
+    existing_metric = _load_existing_best_metric(artifact_path, report_path)
+    if existing_metric is not None and existing_metric <= result.ratio_abs_delta:
+        logger.info(
+            "Пропускаю сохранение: существующая ratio_abs_delta=%.6f лучше или равна новой %.6f",
+            existing_metric,
+            result.ratio_abs_delta,
+        )
+        logger.info("Лучшая модель остается: %s", artifact_path)
+        return
+
     artifact_payload = {
         "best_model_name": result.model_name,
         "pipeline": result.pipeline,
@@ -78,10 +113,9 @@ def main() -> None:
         "with_embeddings": True,
         "feature_config": feature_config.model_dump(mode="json"),
     }
-    artifact_path = save_checkpoint(artifact_payload, filename=Path(args.artifact_path))
+    artifact_path = save_checkpoint(artifact_payload, filename=artifact_path)
     logger.info(f"Артефакт модели сохранен: {artifact_path}")
 
-    report_path = resolve_checkpoint_path(filename=Path(args.report_path))
     report_payload = {
         "best_model_name": result.model_name,
         "gt_should_split_ratio": result.gt_should_split_ratio,
