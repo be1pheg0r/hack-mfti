@@ -7,7 +7,12 @@ import pandas as pd
 import pytest
 
 from avito.should_split.classifier import train_should_split_models
-from avito.should_split.features import append_embedding_features, build_training_matrix, extract_should_split_features
+from avito.should_split.features import (
+    ShouldSplitFeatureConfig,
+    append_embedding_features,
+    build_training_matrix,
+    extract_should_split_features,
+)
 from avito.should_split.inference import (
     ShouldSplitArtifact,
     load_should_split_artifact,
@@ -27,6 +32,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Ремонт под ключ, включая материалы",
             "sourceMcId": 1,
             "sourceMcTitle": "Ремонт квартир и домов под ключ",
+            "caseType": "turnkey",
             "shouldSplit": False,
             "split": "train",
         },
@@ -34,6 +40,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Электрика отдельно, также выполняем сантехнику",
             "sourceMcId": 2,
             "sourceMcTitle": "Электрика",
+            "caseType": "electric",
             "shouldSplit": True,
             "split": "train",
         },
@@ -41,6 +48,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "- плитка\n- покраска\nпомимо штукатурки",
             "sourceMcId": 3,
             "sourceMcTitle": "Отделочные работы",
+            "caseType": "finish",
             "shouldSplit": True,
             "split": "train",
         },
@@ -48,6 +56,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Мелкий ремонт без доп. услуг",
             "sourceMcId": 2,
             "sourceMcTitle": "Электрика",
+            "caseType": "electric",
             "shouldSplit": False,
             "split": "train",
         },
@@ -55,6 +64,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Отдельно делаем демонтаж",
             "sourceMcId": 3,
             "sourceMcTitle": "Отделочные работы",
+            "caseType": "finish",
             "shouldSplit": True,
             "split": "val",
         },
@@ -62,6 +72,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Ремонт под ключ, в том числе доставка",
             "sourceMcId": 1,
             "sourceMcTitle": "Ремонт квартир и домов под ключ",
+            "caseType": "turnkey",
             "shouldSplit": False,
             "split": "val",
         },
@@ -69,6 +80,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Также выполняем электрику и сантехнику",
             "sourceMcId": 4,
             "sourceMcTitle": "Сантехника",
+            "caseType": "plumbing",
             "shouldSplit": True,
             "split": "test",
         },
@@ -76,6 +88,7 @@ def _sample_df() -> pd.DataFrame:
             "description": "Только сборка мебели",
             "sourceMcId": 5,
             "sourceMcTitle": "Сборка мебели",
+            "caseType": "furniture",
             "shouldSplit": False,
             "split": "test",
         },
@@ -92,6 +105,7 @@ def test_extract_should_split_features_counts_markers_and_bullets() -> None:
     assert int(features.iloc[0]["complex_marker_count"]) == 0
     assert int(features.iloc[1]["has_bullets"]) == 1
     assert float(features.iloc[0]["marker_ratio"]) > 0
+    assert features["case_type"].nunique() >= 1
 
 
 def test_append_embedding_features_adds_embedding_columns() -> None:
@@ -114,6 +128,7 @@ def test_build_training_matrix_with_embeddings() -> None:
     assert y.dtype == bool
     assert set(split.unique()) == {"train", "val", "test"}
     assert "source_mc_id" in X.columns
+    assert "case_type" in X.columns
     assert "embedding_000" in X.columns
 
 
@@ -173,3 +188,15 @@ def test_predict_should_split_requires_encoder_for_embedding_artifact() -> None:
 
     with pytest.raises(ValueError):
         predict_should_split(df=df.iloc[:2], artifact=artifact)
+
+
+def test_drop_correlated_features_when_threshold_set() -> None:
+    df = _sample_df().copy()
+
+    # Дублируем числовой признак, чтобы получить корреляцию 1.0
+    df["duplicate_feature"] = df["sourceMcId"]
+
+    cfg = ShouldSplitFeatureConfig(correlation_threshold=0.95)
+    X, _, _ = build_training_matrix(df, include_embeddings=False, config=cfg)
+
+    assert "duplicate_feature" not in X.columns

@@ -15,7 +15,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassif
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 from xgboost import XGBClassifier
 
 from avito.config import ShouldSplitTrainingConfig
@@ -149,12 +149,13 @@ def _build_preprocessor(feature_frame: pd.DataFrame, config: ShouldSplitTraining
             ("scaler", StandardScaler()),
         ]
     )
+
     categorical_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
             (
-                "onehot",
-                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                "ordinal",
+                OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
             ),
         ]
     )

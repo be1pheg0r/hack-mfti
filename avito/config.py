@@ -25,7 +25,7 @@ class ShouldSplitTrainingConfig(BaseModel):
     """
 
     random_state: int = 42
-    categorical_features: list[str] = Field(default_factory=lambda: ["source_mc_id"])
+    categorical_features: list[str] = Field(default_factory=lambda: ["source_mc_id", "case_type"])
     numeric_imputer_fill_value: float = 0.0
     merge_train_test_for_fit: bool = True
     optuna_n_trials: int = 25

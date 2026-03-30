@@ -14,10 +14,10 @@ _BULLET_PATTERN = re.compile(r"(^|\n)\s*(?:[-*•]|\d+[.)])\s+\S", flags=re.MULT
 
 
 class TextEncoderLike(Protocol):
-    """Structural protocol for text encoders used in feature generation."""
+    """Структурный протокол для текстовых энкодеров в генерации признаков."""
 
     def encode(self, texts: list[str]) -> list[list[float]]:
-        """Encode input texts into dense vectors."""
+        """Преобразует входные тексты в плотные вектора."""
         ...
 
 
@@ -30,6 +30,9 @@ class ShouldSplitFeatureConfig(BaseModel):
     complex_markers: tuple[str, ...] = COMPLEX_MARKERS
     turnkey_source_title: str = TURNKEY_SOURCE_TITLE
     include_extra_text_features: bool = True
+    include_case_type_feature: bool = True
+    case_type_unknown_label: str = "unknown"
+    correlation_threshold: float | None = None
 
 
 def _safe_text(value: Any) -> str:
@@ -83,6 +86,9 @@ def extract_should_split_features(
     descriptions = df["description"].map(_safe_text)
     source_titles = df["sourceMcTitle"].map(_safe_text)
     source_ids = df["sourceMcId"].map(_safe_text)
+    case_types = (
+        df["caseType"].map(_safe_text) if "caseType" in df.columns else pd.Series(cfg.case_type_unknown_label, index=df.index)
+    )
 
     features = pd.DataFrame(index=df.index)
     features["description_word_count"] = descriptions.map(lambda text: len(text.split())).astype(np.float32)
@@ -94,6 +100,9 @@ def extract_should_split_features(
 
     features["source_mc_id"] = source_ids
     features["is_turnkey"] = source_titles.map(lambda title: int(title.strip() == cfg.turnkey_source_title)).astype(np.int8)
+
+    if cfg.include_case_type_feature:
+        features["case_type"] = case_types.astype(str)
 
     if cfg.include_extra_text_features:
         features["sentence_count"] = descriptions.map(_sentence_count).astype(np.float32)
@@ -137,7 +146,9 @@ def build_training_matrix(
     if missing_columns:
         raise ValueError(f"В DataFrame отсутствуют обязательные колонки: {sorted(missing_columns)}")
 
-    features = extract_should_split_features(df=df, config=config)
+    cfg = config or ShouldSplitFeatureConfig()
+
+    features = extract_should_split_features(df=df, config=cfg)
     if include_embeddings:
         if encoder is None:
             raise ValueError("Для include_embeddings=True нужно передать encoder.")
@@ -147,6 +158,33 @@ def build_training_matrix(
             encoder=encoder,
         )
 
+    if cfg.correlation_threshold is not None:
+        features = _drop_highly_correlated_features(features, threshold=cfg.correlation_threshold)
+
     y = df["shouldSplit"].astype(bool)
     split = df["split"].astype(str)
     return features, y, split
+
+
+def _drop_highly_correlated_features(features: pd.DataFrame, *, threshold: float) -> pd.DataFrame:
+    """Удаляет числовые признаки с высокой взаимной корреляцией."""
+    if features.empty:
+        return features
+
+    numeric_cols = features.select_dtypes(include=[np.number, "bool"]).columns
+    if len(numeric_cols) < 2:
+        return features
+
+    corr_matrix = features[numeric_cols].corr().abs()
+    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+    to_drop: set[str] = set()
+    for column in upper.columns:
+        high_corr = upper[column] > threshold
+        if high_corr.any():
+            to_drop.add(column)
+
+    if not to_drop:
+        return features
+
+    return features.drop(columns=list(to_drop), errors="ignore")
