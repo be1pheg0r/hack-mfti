@@ -124,6 +124,7 @@ def main() -> None:
         "mlb_classes": result.mlb_classes,
         "metrics": result.metrics,
         "model_comparison_records": result.model_comparison_records,
+        "tuned_params": result.tuned_params,
         "with_embeddings": True,
         "feature_config": feature_config.model_dump(mode="json"),
         "training_config": training_config.model_dump(mode="json"),
@@ -137,6 +138,7 @@ def main() -> None:
         "metrics": result.metrics,
         "mlb_classes": result.mlb_classes,
         "model_comparison_records": result.model_comparison_records,
+        "tuned_params": result.tuned_params,
     }
     report_path.write_text(json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"JSON-отчет сохранен: {report_path}")

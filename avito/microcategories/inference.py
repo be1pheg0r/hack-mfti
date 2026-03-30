@@ -22,7 +22,7 @@ from common.logger import AVITO_MICROCATS_LOGGER as logger
 class MicrocategoryArtifact(BaseModel):
     """Контракт сериализованного артефакта модели микрокатегорий."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
     model_name: str
     pipeline: Pipeline
@@ -32,6 +32,7 @@ class MicrocategoryArtifact(BaseModel):
     feature_config: dict[str, Any] = Field(default_factory=dict)
     training_config: dict[str, Any] = Field(default_factory=dict)
     model_comparison_records: list[dict[str, Any]] = Field(default_factory=list)
+    tuned_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class MicrocategoryInferenceResult(BaseModel):
@@ -54,6 +55,7 @@ def load_microcategory_artifact(artifact_path: str | Path) -> MicrocategoryArtif
     feature_config_payload = payload.get("feature_config") or {}
     training_config_payload = payload.get("training_config") or {}
     comparison_records = payload.get("model_comparison_records") or []
+    tuned_params = payload.get("tuned_params") or {}
 
     if not isinstance(pipeline, Pipeline):
         raise ValueError("Поле 'pipeline' должно быть sklearn Pipeline")
@@ -71,6 +73,7 @@ def load_microcategory_artifact(artifact_path: str | Path) -> MicrocategoryArtif
         feature_config=feature_config_payload if isinstance(feature_config_payload, dict) else {},
         training_config=training_config_payload if isinstance(training_config_payload, dict) else {},
         model_comparison_records=comparison_records if isinstance(comparison_records, list) else [],
+        tuned_params=tuned_params if isinstance(tuned_params, dict) else {},
     )
 
 

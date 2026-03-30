@@ -4,3 +4,19 @@ params:
   max_depth: null
   min_samples_split: 2
   min_samples_leaf: 1
+for_tune:
+  n_estimators:
+    type: int
+    low: 200
+    high: 800
+    step: 100
+  max_depth:
+    type: int
+    low: 4
+    high: 16
+    step: 2
+  min_samples_leaf:
+    type: int
+    low: 1
+    high: 6
+    step: 1

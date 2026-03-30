@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+import optuna
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -17,6 +18,8 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MultiLabelBinarizer, OrdinalEncoder, StandardScaler
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
 from xgboost import XGBClassifier
 
 from avito.features import (
@@ -45,6 +48,8 @@ class MicrocategoryTrainingConfig(BaseModel):
     threshold_grid: list[float] = Field(default_factory=lambda: [0.5])
     log_reg_c: float = 1.0
     max_iter: int = 1500
+    optuna_n_trials: int = 15
+    optuna_timeout_sec: int | None = None
     categorical_features: list[str] = Field(default_factory=lambda: ["source_mc_id", "case_type"])
 
     @field_validator("threshold_grid")
@@ -73,11 +78,18 @@ class MicrocategoryTrainingConfig(BaseModel):
             raise ValueError("max_iter должен быть положительным")
         return int(value)
 
+    @field_validator("optuna_n_trials")
+    @classmethod
+    def validate_optuna_trials(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("optuna_n_trials не может быть отрицательным")
+        return int(value)
+
 
 class TrainedMicrocategoryModel(BaseModel):
     """Контейнер с обученной моделью выделения микрокатегорий."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
     model_name: str
     pipeline: Pipeline
@@ -85,6 +97,30 @@ class TrainedMicrocategoryModel(BaseModel):
     mlb_classes: list[int]
     metrics: dict[str, float]
     model_comparison_records: list[dict[str, float | str]] = Field(default_factory=list)
+    tuned_params: dict[str, Any] = Field(default_factory=dict)
+
+
+class TuneParamConfig(BaseModel):
+    """Конфигурация одного тюнимого параметра для Optuna."""
+
+    type: str
+    low: float | int | None = None
+    high: float | int | None = None
+    choices: list[str | int | float | bool] | None = None
+    log: bool = False
+    step: float | int | None = None
+
+    @field_validator("choices")
+    @classmethod
+    def validate_choices(
+        cls,
+        value: list[str | int | float | bool] | None,
+        info: Any,
+    ) -> list[str | int | float | bool] | None:
+        if info.data.get("type") == "categorical":
+            if value is None or len(value) == 0:
+                raise ValueError("choices must be provided for categorical tune param")
+        return value
 
 
 class ModelArchitectureConfig(BaseModel):
@@ -92,6 +128,7 @@ class ModelArchitectureConfig(BaseModel):
 
     enabled: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
+    for_tune: dict[str, TuneParamConfig] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -99,6 +136,8 @@ class MicrocategoryModelConfigPaths:
     one_vs_rest_logreg: Path
     one_vs_rest_random_forest: Path
     one_vs_rest_xgboost: Path
+    one_vs_rest_catboost: Path
+    one_vs_rest_lightgbm: Path
 
 
 def get_microcategory_model_config_paths() -> MicrocategoryModelConfigPaths:
@@ -109,6 +148,8 @@ def get_microcategory_model_config_paths() -> MicrocategoryModelConfigPaths:
         one_vs_rest_logreg=config_dir / "one_vs_rest_logreg.yaml",
         one_vs_rest_random_forest=config_dir / "one_vs_rest_random_forest.yaml",
         one_vs_rest_xgboost=config_dir / "one_vs_rest_xgboost.yaml",
+        one_vs_rest_catboost=config_dir / "one_vs_rest_catboost.yaml",
+        one_vs_rest_lightgbm=config_dir / "one_vs_rest_lightgbm.yaml",
     )
 
 
@@ -117,6 +158,8 @@ def _build_architecture_map(paths: MicrocategoryModelConfigPaths) -> dict[str, P
         "one_vs_rest_logreg": paths.one_vs_rest_logreg,
         "one_vs_rest_random_forest": paths.one_vs_rest_random_forest,
         "one_vs_rest_xgboost": paths.one_vs_rest_xgboost,
+        "one_vs_rest_catboost": paths.one_vs_rest_catboost,
+        "one_vs_rest_lightgbm": paths.one_vs_rest_lightgbm,
     }
 
 
@@ -137,6 +180,48 @@ def _load_architecture_configs() -> dict[str, ModelArchitectureConfig]:
         raise ValueError("Хотя бы одна архитектура должна быть включена в model-конфигах микрокатегорий")
 
     return configs
+
+
+def _sample_tune_params(
+    trial: optuna.trial.BaseTrial,
+    architecture_name: str,
+    tune_config: dict[str, TuneParamConfig],
+) -> dict[str, Any]:
+    sampled_params: dict[str, Any] = {}
+
+    for param_name, tune_param in tune_config.items():
+        trial_param_name = f"{architecture_name}__{param_name}"
+
+        if tune_param.type == "categorical":
+            choices = tune_param.choices
+            if choices is None:
+                raise ValueError(f"Для категориального параметра нужно задать choices: {param_name}")
+            choices_tuple: tuple[str | int | float | bool, ...] = tuple(choices)
+            sampled_params[param_name] = trial.suggest_categorical(trial_param_name, choices_tuple)
+            continue
+
+        if tune_param.low is None or tune_param.high is None:
+            raise ValueError(f"Для числового параметра нужно задать low/high: {param_name}")
+
+        if tune_param.type == "int":
+            sampled_params[param_name] = trial.suggest_int(
+                trial_param_name,
+                int(tune_param.low),
+                int(tune_param.high),
+                step=int(tune_param.step) if tune_param.step is not None else 1,
+                log=tune_param.log,
+            )
+            continue
+
+        sampled_params[param_name] = trial.suggest_float(
+            trial_param_name,
+            float(tune_param.low),
+            float(tune_param.high),
+            step=float(tune_param.step) if tune_param.step is not None else None,
+            log=tune_param.log,
+        )
+
+    return sampled_params
 
 
 def _parse_mc_list(value: Any) -> list[int]:
@@ -297,6 +382,27 @@ def _make_estimator(
         base_estimator = XGBClassifier(**effective_params)
         return OneVsRestClassifier(base_estimator)
 
+    if architecture_name == "one_vs_rest_catboost":
+        effective_params.setdefault("iterations", 500)
+        effective_params.setdefault("learning_rate", 0.1)
+        effective_params.setdefault("depth", 6)
+        effective_params.setdefault("loss_function", "Logloss")
+        effective_params.setdefault("verbose", 100)
+        effective_params.setdefault("random_seed", cfg.random_state)
+        base_estimator = CatBoostClassifier(**effective_params)
+        return OneVsRestClassifier(base_estimator)
+
+    if architecture_name == "one_vs_rest_lightgbm":
+        effective_params.setdefault("n_estimators", 500)
+        effective_params.setdefault("learning_rate", 0.05)
+        effective_params.setdefault("max_depth", -1)
+        effective_params.setdefault("subsample", 0.9)
+        effective_params.setdefault("colsample_bytree", 0.9)
+        effective_params.setdefault("random_state", cfg.random_state)
+        effective_params.setdefault("n_jobs", -1)
+        base_estimator = LGBMClassifier(**effective_params)
+        return OneVsRestClassifier(base_estimator)
+
     raise ValueError(f"Неизвестная архитектура: {architecture_name}")
 
 
@@ -371,6 +477,7 @@ def train_microcategory_model(
     best_pipeline: Pipeline | None = None
     best_threshold: float | None = None
     best_metrics: dict[str, float] | None = None
+    best_base_params: dict[str, Any] | None = None
     best_micro_f1 = -1.0
 
     for architecture_index, (architecture_name, architecture_config) in enumerate(enabled_items, start=1):
@@ -411,9 +518,97 @@ def train_microcategory_model(
             best_pipeline = pipeline
             best_threshold = candidate_threshold
             best_metrics = dict(candidate_metrics)
+            best_base_params = dict(architecture_config.params)
 
-    if best_model_name is None or best_pipeline is None or best_threshold is None or best_metrics is None:
+    if best_model_name is None or best_pipeline is None or best_threshold is None or best_metrics is None or best_base_params is None:
         raise RuntimeError("Не удалось выбрать лучшую архитектуру микрокатегорий")
+
+    tuned_params: dict[str, Any] = {}
+    best_arch_config = architecture_configs[best_model_name]
+
+    if best_arch_config.for_tune and cfg.optuna_n_trials > 0:
+        log_block_separator(logger)
+        logger.info("Запуск Optuna-тюнинга")
+        logger.info(f"Архитектура: {best_model_name}")
+        logger.info(f"n_trials: {cfg.optuna_n_trials}")
+        logger.info(f"timeout: {cfg.optuna_timeout_sec}")
+        log_block_separator(logger)
+
+        def objective(trial: optuna.Trial) -> float:
+            sampled_params = _sample_tune_params(
+                trial=trial,
+                architecture_name=best_model_name,
+                tune_config=best_arch_config.for_tune,
+            )
+            merged_params = {**best_base_params, **sampled_params}
+            estimator = _make_estimator(
+                best_model_name,
+                params=merged_params,
+                cfg=cfg,
+            )
+            pipeline = Pipeline(steps=[("preprocessor", clone(preprocessor)), ("model", estimator)])
+            try:
+                fit_model_with_progress(pipeline, X_fit, y_fit, X_val)
+            except Exception as fit_error:  # noqa: BLE001
+                logger.warning(f"Ошибка обучения во время trial: {fit_error}")
+                return -1e9
+
+            val_proba = _predict_proba(pipeline, X_val)
+            _, candidate_metrics = _evaluate_thresholds(
+                y_true=y_val,
+                proba=val_proba,
+                thresholds=cfg.threshold_grid,
+            )
+            return float(candidate_metrics.get("micro_f1", -1.0))
+
+        def _trial_callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+            logger.info(
+                "Optuna trial завершен: "
+                f"trial={trial.number}, value={trial.value:.6f}, best={study.best_value:.6f}"
+            )
+            logger.info(f"  params={trial.params}")
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(direction="maximize")
+        study.optimize(
+            objective,
+            n_trials=cfg.optuna_n_trials,
+            timeout=cfg.optuna_timeout_sec,
+            show_progress_bar=False,
+            callbacks=[_trial_callback],
+        )
+
+        tuned_params = {
+            param_name: value
+            for prefixed_name, value in study.best_trial.params.items()
+            for param_name in [prefixed_name.replace(f"{best_model_name}__", "", 1)]
+        }
+
+        log_block_separator(logger)
+        logger.info(f"Лучшие параметры после Optuna для {best_model_name}:")
+        logger.info(f"  tuned_params={tuned_params}")
+        logger.info(f"  best_value={study.best_value:.6f}")
+        log_block_separator(logger)
+    else:
+        logger.info(
+            "Тюнинг пропущен: либо отсутствует for_tune, либо optuna_n_trials=0"
+        )
+
+    # Финальное обучение с учетом тюнинга
+    final_params = {**best_base_params, **tuned_params}
+    final_estimator = _make_estimator(
+        best_model_name,
+        params=final_params,
+        cfg=cfg,
+    )
+    final_pipeline = Pipeline(steps=[("preprocessor", clone(preprocessor)), ("model", final_estimator)])
+    fit_model_with_progress(final_pipeline, X_fit, y_fit, X_val)
+    final_val_proba = _predict_proba(final_pipeline, X_val)
+    final_threshold, final_metrics = _evaluate_thresholds(
+        y_true=y_val,
+        proba=final_val_proba,
+        thresholds=cfg.threshold_grid,
+    )
 
     comparison_records = sorted(
         model_rows,
@@ -432,9 +627,10 @@ def train_microcategory_model(
 
     return TrainedMicrocategoryModel(
         model_name=best_model_name,
-        pipeline=best_pipeline,
-        threshold=best_threshold,
+        pipeline=final_pipeline,
+        threshold=final_threshold,
         mlb_classes=[int(cls) for cls in mlb.classes_.tolist()],
-        metrics=best_metrics,
+        metrics=final_metrics,
         model_comparison_records=comparison_records,
+        tuned_params=tuned_params,
     )
