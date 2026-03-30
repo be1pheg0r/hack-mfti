@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from avito.should_split.classifier import TrainedShouldSplitModel, train_should_split_models
-from avito.should_split.features import (
+from avito.features import (
     ShouldSplitFeatureConfig,
     TextEncoderLike,
     append_embedding_features,
     build_training_matrix,
     extract_should_split_features,
+    resolve_keyphrases,
 )
 from avito.should_split.inference import (
     ShouldSplitArtifact,

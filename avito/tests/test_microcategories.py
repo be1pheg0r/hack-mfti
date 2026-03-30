@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pandas as pd
 
+from avito.features import ShouldSplitFeatureConfig
 from avito.microcategories.classifier import MicrocategoryTrainingConfig, train_microcategory_model
 from avito.microcategories.inference import MicrocategoryArtifact, predict_microcategories
-from avito.should_split.features import ShouldSplitFeatureConfig
 
 
 def _make_df() -> pd.DataFrame:

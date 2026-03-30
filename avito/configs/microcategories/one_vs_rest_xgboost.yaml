@@ -1,0 +1,10 @@
+enabled: true
+params:
+  n_estimators: 400
+  learning_rate: 0.05
+  max_depth: 6
+  subsample: 0.9
+  colsample_bytree: 0.9
+  eval_metric: logloss
+  tree_method: hist
+  objective: binary:logistic

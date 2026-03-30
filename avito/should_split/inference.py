@@ -9,11 +9,12 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 from sklearn.pipeline import Pipeline
 
-from avito.should_split.features import (
+from avito.features import (
     ShouldSplitFeatureConfig,
     TextEncoderLike,
     append_embedding_features,
     extract_should_split_features,
+    resolve_keyphrases,
 )
 
 
@@ -105,7 +106,8 @@ def predict_should_split(
         Предсказания и, при наличии, вероятности.
     """
     resolved_feature_config = _resolve_feature_config(artifact=artifact, feature_config=feature_config)
-    features = extract_should_split_features(df=df, config=resolved_feature_config)
+    keyphrases = resolve_keyphrases(df, resolved_feature_config)
+    features = extract_should_split_features(df=df, config=resolved_feature_config, keyphrases=keyphrases)
 
     if artifact.with_embeddings:
         if encoder is None:
@@ -114,6 +116,8 @@ def predict_should_split(
             features=features,
             descriptions=df["description"].tolist(),
             encoder=encoder,
+            keyphrases=keyphrases,
+            config=resolved_feature_config,
         )
 
     raw_pred = np.asarray(artifact.pipeline.predict(features))

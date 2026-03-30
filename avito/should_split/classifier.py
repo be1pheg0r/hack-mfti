@@ -20,7 +20,7 @@ from xgboost import XGBClassifier
 
 from avito.config import ShouldSplitTrainingConfig
 from avito.constants import GT_SHOULD_SPLIT_RATIO
-from avito.should_split.features import ShouldSplitFeatureConfig, TextEncoderLike, build_training_matrix
+from avito.features import ShouldSplitFeatureConfig, TextEncoderLike, build_training_matrix
 from common.files import read_yaml
 from common.logger import (
     AVITO_SHOULD_SPLIT_LOGGER as logger,

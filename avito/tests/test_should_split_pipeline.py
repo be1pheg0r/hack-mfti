@@ -6,13 +6,14 @@ import joblib
 import pandas as pd
 import pytest
 
-from avito.should_split.classifier import train_should_split_models
-from avito.should_split.features import (
+from avito.features import (
     ShouldSplitFeatureConfig,
     append_embedding_features,
     build_training_matrix,
     extract_should_split_features,
+    resolve_keyphrases,
 )
+from avito.should_split.classifier import train_should_split_models
 from avito.should_split.inference import (
     ShouldSplitArtifact,
     load_should_split_artifact,
@@ -105,6 +106,8 @@ def test_extract_should_split_features_counts_markers_and_bullets() -> None:
     assert int(features.iloc[0]["complex_marker_count"]) == 0
     assert int(features.iloc[1]["has_bullets"]) == 1
     assert float(features.iloc[0]["marker_ratio"]) > 0
+    assert "max_keyphrase_rapidfuzz" in features.columns
+    assert "split_marker_near_keyphrase" in features.columns
     assert features["case_type"].nunique() >= 1
 
 
@@ -112,10 +115,20 @@ def test_append_embedding_features_adds_embedding_columns() -> None:
     df = _sample_df().iloc[:3].copy()
     base = extract_should_split_features(df)
 
-    extended = append_embedding_features(base, descriptions=df["description"].tolist(), encoder=_FakeEncoder())
+    keyphrases = resolve_keyphrases(df)
+    cfg = ShouldSplitFeatureConfig()
+    extended = append_embedding_features(
+        base,
+        descriptions=df["description"].tolist(),
+        encoder=_FakeEncoder(),
+        keyphrases=keyphrases,
+        config=cfg,
+    )
 
     assert "embedding_000" in extended.columns
     assert "embedding_001" in extended.columns
+    assert "max_keyphrase_cosine_similarity" in extended.columns
+    assert "max_entailment_similarity" in extended.columns
     assert len(extended) == len(base)
 
 

@@ -9,8 +9,8 @@ import pandas as pd
 
 from avito.config import AvitoCaseConfig
 from avito.embeddings import EncoderConfig, SentenceTransformerEncoder
+from avito.features import ShouldSplitFeatureConfig
 from avito.microcategories.classifier import MicrocategoryTrainingConfig, train_microcategory_model
-from avito.should_split.features import ShouldSplitFeatureConfig
 from common.checkpoints import resolve_checkpoint_path, save_checkpoint
 from common.logger import AVITO_MICROCATS_LOGGER as logger
 from common.paths import get_avito_checkpoints_dpath, get_avito_data_dpath
@@ -29,6 +29,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=str(Path(get_avito_data_dpath()) / case_config.should_split.cli_defaults.dataset_filename),
         help="Путь к CSV-датасету.",
+    )
+    parser.add_argument(
+        "--extra-data-path",
+        type=str,
+        default=None,
+        help="Опциональный дополнительный CSV-датасет (например, rnc_dataset_augmented_pilot).",
     )
     parser.add_argument(
         "--artifact-path",
@@ -73,6 +79,15 @@ def main() -> None:
     logger.info(f"Загрузка данных из: {data_path}")
     df = pd.read_csv(data_path)
 
+    if args.extra_data_path:
+        extra_path = Path(args.extra_data_path)
+        if not extra_path.exists():
+            raise FileNotFoundError(f"Дополнительный датасет не найден: {extra_path}")
+        logger.info(f"Загрузка дополнительного датасета: {extra_path}")
+        extra_df = pd.read_csv(extra_path)
+        df = pd.concat([df, extra_df], ignore_index=True)
+        logger.info(f"Общий размер датасета после объединения: {len(df)}")
+
     logger.info("Инициализация FRIDA-энкодера для эмбеддинговых признаков")
     encoder = SentenceTransformerEncoder(EncoderConfig.from_default_yaml())
 
@@ -108,6 +123,7 @@ def main() -> None:
         "threshold": result.threshold,
         "mlb_classes": result.mlb_classes,
         "metrics": result.metrics,
+        "model_comparison_records": result.model_comparison_records,
         "with_embeddings": True,
         "feature_config": feature_config.model_dump(mode="json"),
         "training_config": training_config.model_dump(mode="json"),
@@ -120,6 +136,7 @@ def main() -> None:
         "threshold": result.threshold,
         "metrics": result.metrics,
         "mlb_classes": result.mlb_classes,
+        "model_comparison_records": result.model_comparison_records,
     }
     report_path.write_text(json.dumps(report_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"JSON-отчет сохранен: {report_path}")

@@ -9,11 +9,12 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 from sklearn.pipeline import Pipeline
 
-from avito.should_split.features import (
+from avito.features import (
     ShouldSplitFeatureConfig,
     TextEncoderLike,
     append_embedding_features,
     extract_should_split_features,
+    resolve_keyphrases,
 )
 from common.logger import AVITO_MICROCATS_LOGGER as logger
 
@@ -30,6 +31,7 @@ class MicrocategoryArtifact(BaseModel):
     with_embeddings: bool = False
     feature_config: dict[str, Any] = Field(default_factory=dict)
     training_config: dict[str, Any] = Field(default_factory=dict)
+    model_comparison_records: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MicrocategoryInferenceResult(BaseModel):
@@ -51,6 +53,7 @@ def load_microcategory_artifact(artifact_path: str | Path) -> MicrocategoryArtif
     with_embeddings = bool(payload.get("with_embeddings", False))
     feature_config_payload = payload.get("feature_config") or {}
     training_config_payload = payload.get("training_config") or {}
+    comparison_records = payload.get("model_comparison_records") or []
 
     if not isinstance(pipeline, Pipeline):
         raise ValueError("Поле 'pipeline' должно быть sklearn Pipeline")
@@ -67,6 +70,7 @@ def load_microcategory_artifact(artifact_path: str | Path) -> MicrocategoryArtif
         with_embeddings=with_embeddings,
         feature_config=feature_config_payload if isinstance(feature_config_payload, dict) else {},
         training_config=training_config_payload if isinstance(training_config_payload, dict) else {},
+        model_comparison_records=comparison_records if isinstance(comparison_records, list) else [],
     )
 
 
@@ -90,7 +94,8 @@ def predict_microcategories(
 ) -> MicrocategoryInferenceResult:
     """Предсказывает список микрокатегорий для объявлений."""
     resolved_feature_config = _resolve_feature_config(artifact=artifact, feature_config=feature_config)
-    features = extract_should_split_features(df=df, config=resolved_feature_config)
+    keyphrases = resolve_keyphrases(df, resolved_feature_config)
+    features = extract_should_split_features(df=df, config=resolved_feature_config, keyphrases=keyphrases)
 
     if artifact.with_embeddings:
         if encoder is None:
@@ -99,6 +104,8 @@ def predict_microcategories(
             features=features,
             descriptions=df["description"].tolist(),
             encoder=encoder,
+            keyphrases=keyphrases,
+            config=resolved_feature_config,
         )
 
     if hasattr(artifact.pipeline, "predict_proba"):

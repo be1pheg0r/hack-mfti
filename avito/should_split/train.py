@@ -10,7 +10,7 @@ import joblib
 from avito.config import AvitoCaseConfig
 from avito.should_split.classifier import train_should_split_models
 from avito.embeddings import EncoderConfig, SentenceTransformerEncoder
-from avito.should_split.features import ShouldSplitFeatureConfig
+from avito.features import ShouldSplitFeatureConfig
 from common.checkpoints import resolve_checkpoint_path, save_checkpoint
 from common.logger import AVITO_SHOULD_SPLIT_LOGGER as logger
 from common.paths import get_avito_checkpoints_dpath, get_avito_data_dpath

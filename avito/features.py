@@ -5,12 +5,14 @@ from typing import Any, Protocol, Sequence
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+from rapidfuzz import fuzz, process
 
 from avito.constants import COMPLEX_MARKERS, SPLIT_MARKERS, TURNKEY_SOURCE_TITLE
 
 
 _BULLET_PATTERN = re.compile(r"(^|\n)\s*(?:[-*•]|\d+[.)])\s+\S", flags=re.MULTILINE)
+_SENTENCE_SPLIT_PATTERN = re.compile(r"[.!?]+")
 
 
 class TextEncoderLike(Protocol):
@@ -34,6 +36,23 @@ class ShouldSplitFeatureConfig(BaseModel):
     case_type_unknown_label: str = "unknown"
     correlation_threshold: float | None = None
 
+    # Расширенные признаки по ключевым фразам микрокатегорий
+    include_keyphrase_similarity: bool = True
+    include_rapidfuzz_score: bool = True
+    include_entailment_similarity: bool = True
+    include_split_marker_window: bool = True
+    keyphrase_columns: tuple[str, ...] = ("sourceMcTitle",)
+    extra_keyphrases: tuple[str, ...] = ()
+    split_marker_window: int = 2
+    entailment_template: str = "селлер предлагает {phrase} отдельно"
+
+    @field_validator("split_marker_window")
+    @classmethod
+    def validate_window(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("split_marker_window должен быть неотрицательным")
+        return int(value)
+
 
 def _safe_text(value: Any) -> str:
     if value is None:
@@ -53,7 +72,7 @@ def _has_bullets(text: str) -> int:
 
 
 def _sentence_count(text: str) -> int:
-    chunks = [chunk for chunk in re.split(r"[.!?]+", text) if chunk.strip()]
+    chunks = [chunk for chunk in _SENTENCE_SPLIT_PATTERN.split(text) if chunk.strip()]
     return max(len(chunks), 1) if text.strip() else 0
 
 
@@ -71,9 +90,81 @@ def _punctuation_ratio(text: str) -> float:
     return float(punct_count / max(len(text), 1))
 
 
+def resolve_keyphrases(df: pd.DataFrame, config: ShouldSplitFeatureConfig | None = None) -> list[str]:
+    """Формирует список ключевых фраз для микрокатегорий из датафрейма и конфига."""
+
+    cfg = config or ShouldSplitFeatureConfig()
+    phrases: list[str] = []
+
+    for column in cfg.keyphrase_columns:
+        if column in df.columns:
+            phrases.extend(df[column].dropna().astype(str).tolist())
+
+    phrases.extend(cfg.extra_keyphrases)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for phrase in phrases:
+        cleaned = _safe_text(phrase).strip()
+        lowered = cleaned.lower()
+        if cleaned and lowered not in seen:
+            seen.add(lowered)
+            normalized.append(cleaned)
+
+    return normalized
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    return [chunk.strip() for chunk in _SENTENCE_SPLIT_PATTERN.split(text) if chunk.strip()]
+
+
+def _split_marker_near_keyphrase(
+    text: str,
+    keyphrases: Sequence[str],
+    split_markers: Sequence[str],
+    window: int,
+) -> int:
+    if not text or not keyphrases:
+        return 0
+
+    sentences = _split_into_sentences(text)
+    if not sentences:
+        return 0
+
+    lowered_keyphrases = [phrase.lower() for phrase in keyphrases]
+    lowered_markers = [marker.lower() for marker in split_markers]
+
+    for idx, sentence in enumerate(sentences):
+        lowered_sentence = sentence.lower()
+        if not any(phrase in lowered_sentence for phrase in lowered_keyphrases):
+            continue
+
+        start = max(0, idx - window)
+        end = min(len(sentences), idx + window + 1)
+        window_sentences = sentences[start:end]
+        for window_sentence in window_sentences:
+            lowered_window = window_sentence.lower()
+            if any(marker in lowered_window for marker in lowered_markers):
+                return 1
+    return 0
+
+
+def _max_rapidfuzz_score(text: str, keyphrases: Sequence[str]) -> float:
+    if not text or not keyphrases:
+        return 0.0
+
+    # Используем token_set_ratio для устойчивости к порядку слов
+    result = process.extractOne(text, keyphrases, scorer=fuzz.token_set_ratio, score_cutoff=0)
+    if result is None:
+        return 0.0
+    # extractOne возвращает (match, score, index)
+    return float(result[1])
+
+
 def extract_should_split_features(
     df: pd.DataFrame,
     config: ShouldSplitFeatureConfig | None = None,
+    keyphrases: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """Извлекает текстовые и категориальные признаки для shouldSplit."""
     cfg = config or ShouldSplitFeatureConfig()
@@ -83,11 +174,15 @@ def extract_should_split_features(
     if missing_columns:
         raise ValueError(f"В DataFrame отсутствуют обязательные колонки: {sorted(missing_columns)}")
 
+    resolved_keyphrases = list(keyphrases) if keyphrases is not None else resolve_keyphrases(df, cfg)
+
     descriptions = df["description"].map(_safe_text)
     source_titles = df["sourceMcTitle"].map(_safe_text)
     source_ids = df["sourceMcId"].map(_safe_text)
     case_types = (
-        df["caseType"].map(_safe_text) if "caseType" in df.columns else pd.Series(cfg.case_type_unknown_label, index=df.index)
+        df["caseType"].map(_safe_text)
+        if "caseType" in df.columns
+        else pd.Series(cfg.case_type_unknown_label, index=df.index)
     )
 
     features = pd.DataFrame(index=df.index)
@@ -109,7 +204,35 @@ def extract_should_split_features(
         features["avg_word_len"] = descriptions.map(_avg_word_length).astype(np.float32)
         features["punctuation_ratio"] = descriptions.map(_punctuation_ratio).astype(np.float32)
 
+    if cfg.include_rapidfuzz_score:
+        features["max_keyphrase_rapidfuzz"] = descriptions.map(
+            lambda text: _max_rapidfuzz_score(text, resolved_keyphrases)
+        ).astype(np.float32)
+
+    if cfg.include_split_marker_window:
+        features["split_marker_near_keyphrase"] = descriptions.map(
+            lambda text: _split_marker_near_keyphrase(
+                text,
+                resolved_keyphrases,
+                cfg.split_markers,
+                cfg.split_marker_window,
+            )
+        ).astype(np.int8)
+
     return features
+
+
+def _compute_max_cosine_similarity(
+    embeddings: np.ndarray,
+    keyphrase_embeddings: np.ndarray,
+) -> np.ndarray:
+    if embeddings.size == 0 or keyphrase_embeddings.size == 0:
+        return np.zeros((embeddings.shape[0],), dtype=np.float32)
+
+    emb_norm = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True).clip(min=1e-12)
+    key_norm = keyphrase_embeddings / np.linalg.norm(keyphrase_embeddings, axis=1, keepdims=True).clip(min=1e-12)
+    similarity = emb_norm @ key_norm.T
+    return similarity.max(axis=1)
 
 
 def append_embedding_features(
@@ -117,8 +240,15 @@ def append_embedding_features(
     descriptions: Sequence[Any],
     encoder: TextEncoderLike,
     prefix: str = "embedding",
+    *,
+    keyphrases: Sequence[str] | None = None,
+    config: ShouldSplitFeatureConfig | None = None,
 ) -> pd.DataFrame:
-    """Добавляет эмбеддинговые признаки в DataFrame фичей."""
+    """Добавляет эмбеддинговые признаки в DataFrame фичей и производные фичи по ключевым фразам."""
+
+    cfg = config or ShouldSplitFeatureConfig()
+    resolved_keyphrases = list(keyphrases) if keyphrases is not None else []
+
     prepared_descriptions = [(_safe_text(text).strip() or "<EMPTY>") for text in descriptions]
     raw_embeddings = encoder.encode(prepared_descriptions)
     embeddings = np.asarray(raw_embeddings, dtype=np.float32)
@@ -130,7 +260,21 @@ def append_embedding_features(
 
     embedding_columns = [f"{prefix}_{idx:03d}" for idx in range(embeddings.shape[1])]
     embedding_df = pd.DataFrame(embeddings, columns=embedding_columns, index=features.index)
-    return pd.concat([features, embedding_df], axis=1)
+
+    augmented = pd.concat([features, embedding_df], axis=1)
+
+    if cfg.include_keyphrase_similarity and resolved_keyphrases:
+        kp_embeddings = np.asarray(encoder.encode(resolved_keyphrases), dtype=np.float32)
+        max_cosine = _compute_max_cosine_similarity(embeddings, kp_embeddings)
+        augmented["max_keyphrase_cosine_similarity"] = max_cosine.astype(np.float32)
+
+    if cfg.include_entailment_similarity and resolved_keyphrases:
+        entailment_phrases = [cfg.entailment_template.format(phrase=phrase) for phrase in resolved_keyphrases]
+        entailment_embeddings = np.asarray(encoder.encode(entailment_phrases), dtype=np.float32)
+        max_entailment = _compute_max_cosine_similarity(embeddings, entailment_embeddings)
+        augmented["max_entailment_similarity"] = max_entailment.astype(np.float32)
+
+    return augmented
 
 
 def build_training_matrix(
@@ -147,8 +291,9 @@ def build_training_matrix(
         raise ValueError(f"В DataFrame отсутствуют обязательные колонки: {sorted(missing_columns)}")
 
     cfg = config or ShouldSplitFeatureConfig()
+    keyphrases = resolve_keyphrases(df, cfg)
 
-    features = extract_should_split_features(df=df, config=cfg)
+    features = extract_should_split_features(df=df, config=cfg, keyphrases=keyphrases)
     if include_embeddings:
         if encoder is None:
             raise ValueError("Для include_embeddings=True нужно передать encoder.")
@@ -156,6 +301,8 @@ def build_training_matrix(
             features,
             descriptions=df["description"].tolist(),
             encoder=encoder,
+            keyphrases=keyphrases,
+            config=cfg,
         )
 
     if cfg.correlation_threshold is not None:

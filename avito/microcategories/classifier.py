@@ -1,25 +1,32 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, precision_score, recall_score
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MultiLabelBinarizer, OrdinalEncoder, StandardScaler
+from xgboost import XGBClassifier
 
-from avito.should_split.features import (
+from avito.features import (
     ShouldSplitFeatureConfig,
     TextEncoderLike,
     append_embedding_features,
     extract_should_split_features,
+    resolve_keyphrases,
 )
+from common.files import read_yaml
 from common.logger import AVITO_MICROCATS_LOGGER as logger
 from common.logger import fit_model_with_progress, log_block_separator
 
@@ -77,6 +84,59 @@ class TrainedMicrocategoryModel(BaseModel):
     threshold: float
     mlb_classes: list[int]
     metrics: dict[str, float]
+    model_comparison_records: list[dict[str, float | str]] = Field(default_factory=list)
+
+
+class ModelArchitectureConfig(BaseModel):
+    """Конфиг одной кандидатной архитектуры микрокатегорий."""
+
+    enabled: bool = True
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MicrocategoryModelConfigPaths:
+    one_vs_rest_logreg: Path
+    one_vs_rest_random_forest: Path
+    one_vs_rest_xgboost: Path
+
+
+def get_microcategory_model_config_paths() -> MicrocategoryModelConfigPaths:
+    """Возвращает абсолютные пути к конфигам архитектур microcategories."""
+
+    config_dir = Path(__file__).resolve().parent.parent / "configs" / "microcategories"
+    return MicrocategoryModelConfigPaths(
+        one_vs_rest_logreg=config_dir / "one_vs_rest_logreg.yaml",
+        one_vs_rest_random_forest=config_dir / "one_vs_rest_random_forest.yaml",
+        one_vs_rest_xgboost=config_dir / "one_vs_rest_xgboost.yaml",
+    )
+
+
+def _build_architecture_map(paths: MicrocategoryModelConfigPaths) -> dict[str, Path]:
+    return {
+        "one_vs_rest_logreg": paths.one_vs_rest_logreg,
+        "one_vs_rest_random_forest": paths.one_vs_rest_random_forest,
+        "one_vs_rest_xgboost": paths.one_vs_rest_xgboost,
+    }
+
+
+def _load_architecture_configs() -> dict[str, ModelArchitectureConfig]:
+    paths = get_microcategory_model_config_paths()
+    architecture_files = _build_architecture_map(paths)
+
+    configs: dict[str, ModelArchitectureConfig] = {}
+    for architecture_name, config_path in architecture_files.items():
+        raw_data = read_yaml(config_path)
+        if raw_data is None:
+            raise ValueError(f"Пустой конфиг архитектуры: {config_path}")
+        if not isinstance(raw_data, dict):
+            raise ValueError(f"Конфиг архитектуры должен быть словарем: {config_path}")
+        configs[architecture_name] = ModelArchitectureConfig.model_validate(raw_data)
+
+    if not any(config.enabled for config in configs.values()):
+        raise ValueError("Хотя бы одна архитектура должна быть включена в model-конфигах микрокатегорий")
+
+    return configs
 
 
 def _parse_mc_list(value: Any) -> list[int]:
@@ -198,6 +258,48 @@ def _evaluate_thresholds(
     return best_threshold, best_metrics
 
 
+def _make_estimator(
+    architecture_name: str,
+    *,
+    params: dict[str, Any],
+    cfg: MicrocategoryTrainingConfig,
+) -> OneVsRestClassifier:
+    effective_params = dict(params)
+
+    if architecture_name == "one_vs_rest_logreg":
+        effective_params.setdefault("C", cfg.log_reg_c)
+        effective_params.setdefault("class_weight", "balanced")
+        effective_params.setdefault("max_iter", cfg.max_iter)
+        effective_params.setdefault("random_state", cfg.random_state)
+        effective_params.setdefault("solver", "liblinear")
+        base_estimator = LogisticRegression(**effective_params)
+        return OneVsRestClassifier(base_estimator)
+
+    if architecture_name == "one_vs_rest_random_forest":
+        effective_params.setdefault("n_estimators", 400)
+        effective_params.setdefault("max_depth", None)
+        effective_params.setdefault("n_jobs", -1)
+        effective_params.setdefault("random_state", cfg.random_state)
+        base_estimator = RandomForestClassifier(**effective_params)
+        return OneVsRestClassifier(base_estimator)
+
+    if architecture_name == "one_vs_rest_xgboost":
+        effective_params.setdefault("n_estimators", 400)
+        effective_params.setdefault("learning_rate", 0.05)
+        effective_params.setdefault("max_depth", 6)
+        effective_params.setdefault("subsample", 0.9)
+        effective_params.setdefault("colsample_bytree", 0.9)
+        effective_params.setdefault("eval_metric", "logloss")
+        effective_params.setdefault("n_jobs", -1)
+        effective_params.setdefault("random_state", cfg.random_state)
+        effective_params.setdefault("tree_method", "hist")
+        effective_params.setdefault("objective", "binary:logistic")
+        base_estimator = XGBClassifier(**effective_params)
+        return OneVsRestClassifier(base_estimator)
+
+    raise ValueError(f"Неизвестная архитектура: {architecture_name}")
+
+
 def train_microcategory_model(
     df: pd.DataFrame,
     *,
@@ -227,7 +329,8 @@ def train_microcategory_model(
     if missing:
         raise ValueError(f"В DataFrame отсутствуют обязательные колонки: {sorted(missing)}")
 
-    features = extract_should_split_features(df=df, config=feat_cfg)
+    keyphrases = resolve_keyphrases(df, feat_cfg)
+    features = extract_should_split_features(df=df, config=feat_cfg, keyphrases=keyphrases)
     if include_embeddings:
         if encoder is None:
             raise ValueError("Для include_embeddings=True нужно передать encoder")
@@ -235,6 +338,8 @@ def train_microcategory_model(
             features=features,
             descriptions=df["description"].tolist(),
             encoder=encoder,
+            keyphrases=keyphrases,
+            config=feat_cfg,
         )
 
     y, mlb = _prepare_targets(df)
@@ -248,44 +353,88 @@ def train_microcategory_model(
     )
 
     preprocessor = _build_preprocessor(features, cfg)
-    estimator = OneVsRestClassifier(
-        LogisticRegression(
-            C=cfg.log_reg_c,
-            class_weight="balanced",
-            max_iter=cfg.max_iter,
-            random_state=cfg.random_state,
-            solver="liblinear",
-        )
-    )
-    pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", estimator)])
+    architecture_configs = _load_architecture_configs()
+    enabled_items = [(name, arch_cfg) for name, arch_cfg in architecture_configs.items() if arch_cfg.enabled]
+
+    if not enabled_items:
+        raise ValueError("Хотя бы одна архитектура должна быть включена для обучения микрокатегорий")
 
     log_block_separator(logger)
-    logger.info("Старт обучения microcategories")
+    logger.info("Старт сравнения архитектур microcategories")
+    logger.info(f"Кандидатов: {len(enabled_items)}")
     logger.info(f"Порогов в сетке: {len(cfg.threshold_grid)}")
     logger.info(f"Признаков в матрице: {features.shape[1]}")
     log_block_separator(logger)
 
-    fit_model_with_progress(pipeline, X_fit, y_fit, X_val)
-    logger.info("Обучение завершено.")
+    model_rows: list[dict[str, float | str]] = []
+    best_model_name: str | None = None
+    best_pipeline: Pipeline | None = None
+    best_threshold: float | None = None
+    best_metrics: dict[str, float] | None = None
+    best_micro_f1 = -1.0
 
-    val_proba = _predict_proba(pipeline, X_val)
-    best_threshold, best_metrics = _evaluate_thresholds(
-        y_true=y_val,
-        proba=val_proba,
-        thresholds=cfg.threshold_grid,
+    for architecture_index, (architecture_name, architecture_config) in enumerate(enabled_items, start=1):
+        estimator = _make_estimator(
+            architecture_name,
+            params=architecture_config.params,
+            cfg=cfg,
+        )
+        current_preprocessor = clone(preprocessor)
+        pipeline = Pipeline(steps=[("preprocessor", current_preprocessor), ("model", estimator)])
+
+        log_block_separator(logger)
+        logger.info(f"[{architecture_index}/{len(enabled_items)}] Архитектура: {architecture_name}")
+        logger.info(f"Базовые параметры: {architecture_config.params}")
+        fit_model_with_progress(pipeline, X_fit, y_fit, X_val)
+
+        val_proba = _predict_proba(pipeline, X_val)
+        candidate_threshold, candidate_metrics = _evaluate_thresholds(
+            y_true=y_val,
+            proba=val_proba,
+            thresholds=cfg.threshold_grid,
+        )
+
+        candidate_record: dict[str, float | str] = {"model": architecture_name, **candidate_metrics}
+        model_rows.append(candidate_record)
+
+        logger.info("Результаты на валидации:")
+        logger.info(f"  micro_f1        = {candidate_metrics['micro_f1']:.6f}")
+        logger.info(f"  micro_precision = {candidate_metrics['micro_precision']:.6f}")
+        logger.info(f"  micro_recall    = {candidate_metrics['micro_recall']:.6f}")
+        logger.info(f"  threshold       = {candidate_threshold:.3f}")
+
+        if candidate_metrics["micro_f1"] > best_micro_f1 or (
+            np.isclose(candidate_metrics["micro_f1"], best_micro_f1) and best_model_name is None
+        ):
+            best_micro_f1 = candidate_metrics["micro_f1"]
+            best_model_name = architecture_name
+            best_pipeline = pipeline
+            best_threshold = candidate_threshold
+            best_metrics = dict(candidate_metrics)
+
+    if best_model_name is None or best_pipeline is None or best_threshold is None or best_metrics is None:
+        raise RuntimeError("Не удалось выбрать лучшую архитектуру микрокатегорий")
+
+    comparison_records = sorted(
+        model_rows,
+        key=lambda row: float(row.get("micro_f1", -1)),
+        reverse=True,
     )
 
-    logger.info("Результаты на валидации:")
-    logger.info(f"  micro_f1        = {best_metrics['micro_f1']:.6f}")
-    logger.info(f"  micro_precision = {best_metrics['micro_precision']:.6f}")
-    logger.info(f"  micro_recall    = {best_metrics['micro_recall']:.6f}")
-    logger.info(f"  threshold       = {best_threshold:.3f}")
+    logger.info("Рейтинг архитектур по micro_f1:")
+    for rank, row in enumerate(comparison_records, start=1):
+        logger.info(
+            f"  #{rank} {row['model']}: micro_f1={float(row['micro_f1']):.6f}, "
+            f"precision={float(row['micro_precision']):.6f}, recall={float(row['micro_recall']):.6f}, "
+            f"threshold={float(row['threshold']):.3f}"
+        )
     log_block_separator(logger)
 
     return TrainedMicrocategoryModel(
-        model_name="one_vs_rest_logreg",
-        pipeline=pipeline,
+        model_name=best_model_name,
+        pipeline=best_pipeline,
         threshold=best_threshold,
         mlb_classes=[int(cls) for cls in mlb.classes_.tolist()],
         metrics=best_metrics,
+        model_comparison_records=comparison_records,
     )

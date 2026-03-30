@@ -2,9 +2,9 @@
   "model_name": "one_vs_rest_logreg",
   "threshold": 0.5,
   "metrics": {
-    "micro_f1": 0.8163424124513619,
-    "micro_precision": 0.7764618800888231,
-    "micro_recall": 0.8605414273995078,
+    "micro_f1": 0.8327953518398967,
+    "micro_precision": 0.7938461538461539,
+    "micro_recall": 0.8757637474541752,
     "threshold": 0.5
   },
   "mlb_classes": [
