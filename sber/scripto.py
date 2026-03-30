@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
 from pathlib import Path
 from typing import *
 import pandas as pd
@@ -18,6 +17,10 @@ from sber.constants import (
     DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
     DEFAULT_HALLUCINATION_SCORE_THRESHOLD,
     DEFAULT_SBER_SCRIPT_BATCH_SIZE,
+    DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX,
+    DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN,
+    DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN,
+    DEFAULT_SBER_SCRIPT_TEMPERATURE_STD,
     DEFAULT_SBER_SCRIPT_MAX_NEW_TOKENS,
     DEFAULT_SBER_SCRIPT_MODEL_NAME,
     DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME,
@@ -36,6 +39,10 @@ class ScriptConfig(BaseModel):
         model_name: Hugging Face имя модели.
         batch_size: Размер батча для генерации.
         max_new_tokens: Максимум новых токенов при генерации.
+        temperature_mean: Среднее температуры для сэмплирования из нормального распределения.
+        temperature_std: Стандартное отклонение температуры.
+        temperature_min: Нижняя граница температуры после clipping.
+        temperature_max: Верхняя граница температуры после clipping.
         output_csv: Путь к итоговому CSV с фичами.
         force_download: Принудительная перезагрузка датасетов.
         datasets_config_path: Опциональный путь к YAML-конфигу датасетов.
@@ -49,6 +56,10 @@ class ScriptConfig(BaseModel):
     model_name: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
     batch_size: int = DEFAULT_SBER_SCRIPT_BATCH_SIZE
     max_new_tokens: int = DEFAULT_SBER_SCRIPT_MAX_NEW_TOKENS
+    temperature_mean: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN
+    temperature_std: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_STD
+    temperature_min: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN
+    temperature_max: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX
     output_csv: PathLike = Field(default_factory=lambda: Path(get_sber_gitignore_data_dpath()) / DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME)
     force_download: bool = False
     datasets_config_path: PathLike | None = None
@@ -71,12 +82,30 @@ class ScriptConfig(BaseModel):
             raise ValueError("model_name не может быть пустым")
         return normalized
 
+    @field_validator("temperature_mean", "temperature_min", "temperature_max")
+    @classmethod
+    def validate_positive_float(cls, value: float) -> float:
+        """Проверяет, что параметры температуры больше нуля."""
+        if value <= 0.0:
+            raise ValueError("Параметры температуры должны быть больше нуля")
+        return value
+
+    @field_validator("temperature_std")
+    @classmethod
+    def validate_non_negative_std(cls, value: float) -> float:
+        """Проверяет, что std температуры неотрицательна."""
+        if value < 0.0:
+            raise ValueError("temperature_std не может быть отрицательной")
+        return value
+
     @model_validator(mode="after")
     def validate_output_suffix(self) -> ScriptConfig:
         """Проверяет расширение файла вывода."""
         output_path: Path = Path(self.output_csv)
         if output_path.suffix.lower() != ".csv":
             raise ValueError("output_csv должен указывать на .csv файл")
+        if self.temperature_min > self.temperature_max:
+            raise ValueError("temperature_min не может быть больше temperature_max")
         return self
 
 
@@ -88,6 +117,30 @@ def parse_args() -> ScriptConfig:
     parser.add_argument("--model-name", type=str, default=DEFAULT_SBER_SCRIPT_MODEL_NAME, help="Имя модели на Hugging Face")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_SBER_SCRIPT_BATCH_SIZE, help="Размер батча для генерации")
     parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_SBER_SCRIPT_MAX_NEW_TOKENS, help="Максимум новых токенов")
+    parser.add_argument(
+        "--temperature-mean",
+        type=float,
+        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN,
+        help="Средняя температура генерации (normal distribution)",
+    )
+    parser.add_argument(
+        "--temperature-std",
+        type=float,
+        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_STD,
+        help="Std температуры генерации (normal distribution)",
+    )
+    parser.add_argument(
+        "--temperature-min",
+        type=float,
+        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN,
+        help="Минимальная температура после clipping",
+    )
+    parser.add_argument(
+        "--temperature-max",
+        type=float,
+        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX,
+        help="Максимальная температура после clipping",
+    )
     parser.add_argument(
         "--output-csv",
         type=str,
@@ -160,6 +213,18 @@ def _flatten_feature_groups(features: FeatureGroups) -> list[float]:
     for group in ordered_groups:
         flattened.extend(float(value) for value in group)
     return flattened
+
+
+def _sample_temperature(
+    rng: random.Random,
+    mean: float,
+    std: float,
+    min_value: float,
+    max_value: float,
+) -> float:
+    """Сэмплирует температуру из нормального распределения и ограничивает диапазон."""
+    sampled: float = mean if std == 0.0 else rng.normalvariate(mean, std)
+    return max(min_value, min(max_value, sampled))
 
 
 def _extract_logits(model_output: Any) -> torch.Tensor:
@@ -261,6 +326,7 @@ def run(config: ScriptConfig) -> Path:
     output_rows: list[dict[str, Any]] = []
     feature_columns: list[str] = []
     sample_counter: int = 0
+    temperature_rng: random.Random = random.Random(config.seed)
 
     with torch.inference_mode():
         with extractor:
@@ -271,6 +337,13 @@ def run(config: ScriptConfig) -> Path:
                 answers=sampled_answers,
                 batch_size=config.batch_size,
             ):
+                batch_temperature: float = _sample_temperature(
+                    rng=temperature_rng,
+                    mean=config.temperature_mean,
+                    std=config.temperature_std,
+                    min_value=config.temperature_min,
+                    max_value=config.temperature_max,
+                )
                 prompts: list[str] = [_build_prompt(tokenizer=tokenizer, query=query) for query in batch_queries]
                 encoded: dict[str, torch.Tensor] = tokenizer(
                     prompts,
@@ -284,7 +357,8 @@ def run(config: ScriptConfig) -> Path:
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=config.max_new_tokens,
-                    do_sample=False,
+                    do_sample=True,
+                    temperature=batch_temperature,
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                 )
@@ -326,6 +400,7 @@ def run(config: ScriptConfig) -> Path:
                         "query": batch_queries[index_in_batch],
                         "ground_truth": batch_answers[index_in_batch],
                         "model_answer": model_answer,
+                        "temperature": batch_temperature,
                         "hallucination_score": hallucination_score,
                         "is_hallucination": is_hallucination,
                     }
