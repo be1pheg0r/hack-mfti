@@ -66,6 +66,7 @@ class ProjectLoggerRegistry(BaseModel):
 
     mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG", prefix="[MISTRAL 🇫🇷] ")
     avito_should_split: LoggerConfig = LoggerConfig(name="avito-should-split", level="INFO", prefix="[SHOULD_SPLIT] ")
+    avito_microcategories: LoggerConfig = LoggerConfig(name="avito-microcategories", level="INFO", prefix="[MICROCATS] ")
 
 class ColoredFormatter(logging.Formatter):
     """Форматтер с цветовым выделением по уровню логирования."""
@@ -158,6 +159,7 @@ def get_project_logger(config_name: str) -> logging.Logger:
 
 MISTRAL_LOGGER: logging.Logger = get_project_logger("mistral_call")
 AVITO_SHOULD_SPLIT_LOGGER: logging.Logger = get_project_logger("avito_should_split")
+AVITO_MICROCATS_LOGGER: logging.Logger = get_project_logger("avito_microcategories")
 
 
 def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:
