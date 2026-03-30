@@ -30,6 +30,7 @@ from sber.datasets_utils import SberDatasetsConfig, retrieve_all_datasets, unpac
 from sber.pt import FeatureExtractorConfig, FeatureGroups, LLMFeatureExtractor
 
 
+
 class ScriptConfig(BaseModel):
     """Конфигурация запуска скрипта извлечения фичей.
 
@@ -191,7 +192,7 @@ def _sample_queries_and_answers(
         raise ValueError(f"Параметр n={n} больше размера датасета ({total_size})")
 
     paired: list[tuple[str, str]] = list(zip(queries, answers))
-    rng: random.Random = random.Random(seed)
+    rng: random.Random = random.Random()
     rng.shuffle(paired)
     sampled_pairs: list[tuple[str, str]] = paired[:n]
     sampled_queries: list[str] = [query for query, _ in sampled_pairs]
@@ -286,6 +287,9 @@ def _prepare_tokenizer(tokenizer: Any) -> Any:
 def _resolve_model_source(model_name: str) -> str:
     """Возвращает локальный путь модели при наличии, иначе исходное имя HF."""
     model_dir_name: str = model_name.rsplit("/", maxsplit=1)[-1]
+
+
+
     local_model_path: Path = Path(get_sber_checkpoints_dpath()) / model_dir_name
     logger.info(f"Пытаюсь найти модель {model_name} в локальных чекпоинтах по пути: {local_model_path}")
     if local_model_path.exists():
@@ -302,6 +306,7 @@ def _build_model_and_tokenizer(model_name: str) -> tuple[Any, Any, torch.device]
         torch.backends.cuda.matmul.allow_tf32 = True
         compute_dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         logger.info(f"Доступно GPU: {gpu_count}, включаю device_map=auto и dtype={compute_dtype}")
+
         model = AutoModelForCausalLM.from_pretrained(
             _resolve_model_source(model_name),
             torch_dtype=compute_dtype,
