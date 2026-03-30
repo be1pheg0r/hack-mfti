@@ -6,7 +6,7 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from sber.scripto import ScriptConfig, _sample_temperature
+from sber.script_extract_features_pt import ScriptConfig, _sample_balanced_queries_and_answers, _sample_temperature
 
 
 def test_sample_temperature_is_deterministic_for_fixed_seed() -> None:
@@ -42,4 +42,67 @@ def test_script_config_rejects_temperature_bounds_in_wrong_order(tmp_path: Any) 
             temperature_min=1.5,
             temperature_max=1.0,
         )
+
+
+def test_balanced_sampling_takes_equal_count_from_each_dataset_and_shuffles() -> None:
+    datasets_map: dict[str, list[dict[str, Any]]] = {
+        "rubq-20": [
+            {"question_text": "rq1", "answer_text": "rubq_a1"},
+            {"question_text": "rq2", "answer_text": "rubq_a2"},
+            {"question_text": "rq3", "answer_text": "rubq_a3"},
+            {"question_text": "rq4", "answer_text": "rubq_a4"},
+        ],
+        "tape-chegeka.raw": [
+            {"question": "cq1", "answer": "chegeka_a1"},
+            {"question": "cq2", "answer": "chegeka_a2"},
+            {"question": "cq3", "answer": "chegeka_a3"},
+            {"question": "cq4", "answer": "chegeka_a4"},
+        ],
+    }
+
+    sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
+        datasets_map=datasets_map,
+        n=4,
+        seed=11,
+    )
+
+    assert len(sampled_queries) == 4
+    assert len(sampled_answers) == 4
+
+    rubq_count: int = sum(answer.startswith("rubq_") for answer in sampled_answers)
+    chegeka_count: int = sum(answer.startswith("chegeka_") for answer in sampled_answers)
+    assert rubq_count == 2
+    assert chegeka_count == 2
+
+    # Проверяем, что после общего shuffle выдача не остается блочно по датасетам.
+    assert sampled_answers not in [
+        ["rubq_a1", "rubq_a2", "chegeka_a1", "chegeka_a2"],
+        ["chegeka_a1", "chegeka_a2", "rubq_a1", "rubq_a2"],
+    ]
+
+
+def test_balanced_sampling_rejects_n_not_divisible_by_dataset_count() -> None:
+    datasets_map: dict[str, list[dict[str, Any]]] = {
+        "rubq-20": [{"question_text": "rq1", "answer_text": "rubq_a1"}],
+        "tape-chegeka.raw": [{"question": "cq1", "answer": "chegeka_a1"}],
+    }
+
+    with pytest.raises(ValueError, match="должен делиться"):
+        _sample_balanced_queries_and_answers(datasets_map=datasets_map, n=3, seed=1)
+
+
+def test_balanced_sampling_rejects_insufficient_dataset_size() -> None:
+    datasets_map: dict[str, list[dict[str, Any]]] = {
+        "rubq-20": [
+            {"question_text": "rq1", "answer_text": "rubq_a1"},
+        ],
+        "tape-chegeka.raw": [
+            {"question": "cq1", "answer": "chegeka_a1"},
+            {"question": "cq2", "answer": "chegeka_a2"},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="недостаточно сэмплов"):
+        _sample_balanced_queries_and_answers(datasets_map=datasets_map, n=4, seed=1)
+
 

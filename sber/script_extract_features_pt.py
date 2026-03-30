@@ -11,7 +11,7 @@ from rapidfuzz import fuzz
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from common.logger import JUPYTER_LOGGER as logger
+from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike, get_sber_checkpoints_dpath, get_sber_gitignore_data_dpath
 from sber.constants import (
     DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
@@ -26,7 +26,7 @@ from sber.constants import (
     DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME,
     DEFAULT_SBER_SCRIPT_SEED,
 )
-from sber.datasets_utils import SberDatasetsConfig, retrieve_all_datasets, unpack_all_datasets
+from sber.datasets_utils import SberDatasetsConfig, retrieve_all_datasets, unpack_dataset
 from sber.pt import FeatureExtractorConfig, FeatureGroups, LLMFeatureExtractor
 
 
@@ -199,6 +199,43 @@ def _sample_queries_and_answers(
     return sampled_queries, sampled_answers
 
 
+def _sample_balanced_queries_and_answers(
+    datasets_map: dict[str, Iterable[dict[str, Any]]],
+    n: int,
+    seed: int,
+) -> tuple[list[str], list[str]]:
+    """Равномерно берет сэмплы из каждого датасета и перемешивает общий пул."""
+    dataset_count: int = len(datasets_map)
+    if dataset_count == 0:
+        raise ValueError("datasets_map не должен быть пустым")
+    if n % dataset_count != 0:
+        raise ValueError(
+            f"Параметр n={n} должен делиться на число датасетов ({dataset_count}) для равномерной выборки"
+        )
+
+    per_dataset: int = n // dataset_count
+    rng: random.Random = random.Random(seed)
+    sampled_pairs: list[tuple[str, str]] = []
+
+    for dataset_name, dataset in datasets_map.items():
+        queries, answers = unpack_dataset(dataset=dataset, name=dataset_name)
+        if len(queries) != len(answers):
+            raise ValueError(f"Датасет {dataset_name}: queries и answers должны быть одной длины")
+        if len(queries) < per_dataset:
+            raise ValueError(
+                f"Датасет {dataset_name} содержит недостаточно сэмплов: {len(queries)} < {per_dataset}"
+            )
+
+        pairs: list[tuple[str, str]] = list(zip(queries, answers))
+        rng.shuffle(pairs)
+        sampled_pairs.extend(pairs[:per_dataset])
+
+    rng.shuffle(sampled_pairs)
+    sampled_queries: list[str] = [query for query, _ in sampled_pairs]
+    sampled_answers: list[str] = [answer for _, answer in sampled_pairs]
+    return sampled_queries, sampled_answers
+
+
 def _flatten_feature_groups(features: FeatureGroups) -> list[float]:
     """Преобразует FeatureGroups в плоский список в фиксированном порядке."""
     ordered_groups: list[list[float]] = [
@@ -250,6 +287,7 @@ def _resolve_model_source(model_name: str) -> str:
     """Возвращает локальный путь модели при наличии, иначе исходное имя HF."""
     model_dir_name: str = model_name.rsplit("/", maxsplit=1)[-1]
     local_model_path: Path = Path(get_sber_checkpoints_dpath()) / model_dir_name
+    logger.info(f"Пытаюсь найти модель {model_name} в локальных чекпоинтах по пути: {local_model_path}")
     if local_model_path.exists():
         logger.info(f"Загружаю модель из локального пути: {local_model_path}")
         return str(local_model_path)
@@ -306,14 +344,16 @@ def run(config: ScriptConfig) -> Path:
         config=datasets_config,
         force_download=config.force_download,
     )
-    all_queries, all_answers = unpack_all_datasets(datasets_map)
-    sampled_queries, sampled_answers = _sample_queries_and_answers(
-        queries=all_queries,
-        answers=all_answers,
+    sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
+        datasets_map=datasets_map,
         n=config.n,
         seed=config.seed,
     )
-    logger.info(f"После shuffle выбрано {len(sampled_queries)} сэмплов из {len(all_queries)}")
+    per_dataset: int = config.n // len(datasets_map)
+    logger.info(
+        f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
+        f"({per_dataset} из каждого датасета)"
+    )
 
     model, tokenizer, input_device = _build_model_and_tokenizer(config.model_name)
     feature_config: FeatureExtractorConfig
@@ -407,6 +447,9 @@ def run(config: ScriptConfig) -> Path:
                     row.update({feature_name: value for feature_name, value in zip(feature_columns, feature_vector)})
                     output_rows.append(row)
                     sample_counter += 1
+
+                    # gc
+                    del full_ids, logits, extracted_features, feature_vector
 
                 progress_bar.update(1)
             progress_bar.close()

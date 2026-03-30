@@ -53,6 +53,16 @@ def read_json(fpath: PathLike) -> SerializedData:
         content: SerializedData = json.load(file)
     return content
 
+def write_json(fpath: PathLike, content: SerializedData) -> None:
+    """Записывает словарь или список в JSON-файл.
+
+    Args:
+        fpath: Путь к JSON-файлу.
+        content: Содержимое для записи (словарь или список).
+    """
+    with open(fpath, "w", encoding="utf-8") as file:
+        json.dump(content, file, ensure_ascii=False, indent=4)
+
 
 def read_txt(fpath: PathLike) -> str:
     """Считывает текстовый файл.
