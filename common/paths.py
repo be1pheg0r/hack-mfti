@@ -216,3 +216,12 @@ def get_sber_configs_dpath() -> PathLike:
     :return: Path: Путь к каталогу конфигурационных файлов для сбер кейса.
     """
     return get_sber_dpath() / "configs"
+
+@fixdir
+@sber
+def get_sber_public_checkpoints_dpath() -> PathLike:
+    """
+    Каталог для хранения публичных контрольных точек моделей для сбер кейса.
+    :return: Path: Путь к каталогу публичных контрольных точек моделей для сбер кейса.
+    """
+    return get_sber_dpath() / "public_checkpoints"
