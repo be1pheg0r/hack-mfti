@@ -1,22 +1,38 @@
 from __future__ import annotations
 
+"""Feature extraction helpers for the Sber case.
+
+Этот модуль содержит каноническую реализацию извлечения внутренних признаков
+из causal language model. Исторически эта логика жила в отдельном legacy-файле,
+где использовалась для генерации handcrafted features для бустинга. Сейчас
+вся актуальная реализация находится в `src/sber/models/extract_features.py`.
+
+Внутри лежат:
+- конфиг экстрактора;
+- pydantic-модель входа для валидации shapes;
+- контейнер фичей;
+- сам экстрактор с hooks на hidden states / attention / MoE routing;
+- dummy-модель для тестов и локальной отладки.
+"""
+
+from contextlib import AbstractContextManager
 from typing import *
 
 import torch
-from torch import nn
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from torch import nn
 
 from common.files import read_yaml
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike
-from sber.constants import (
+from ..constants import (
     DEFAULT_ATTENTION_EPSILON,
     DEFAULT_ENABLE_ATTENTION_ENTROPY,
     DEFAULT_ENABLE_MOE_ROUTING,
+    DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
     DEFAULT_LOGIT_EPSILON,
     DEFAULT_OUTPUT_ATTENTIONS,
     DEFAULT_PROBE_LAYERS,
-    DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
 )
 
 
@@ -24,12 +40,12 @@ class FeatureExtractorConfig(BaseModel):
     """Конфигурация извлечения фичей из языковой модели.
 
     Attributes:
-        probe_layers: Индексы слоев для снятия проб.
-        logit_epsilon: Малое число для стабильных логарифмов по логитам.
-        attention_epsilon: Малое число для стабильных логарифмов по attention.
-        enable_attention_entropy: Флаг расчета attention entropy фичей.
-        enable_moe_routing: Флаг расчета routing фичей для MoE.
-        use_output_attentions: Флаг передачи output_attentions=True в forward.
+        probe_layers: Индексы слоев, из которых снимаются скрытые состояния.
+        logit_epsilon: Малое число для численной стабильности log/entropy.
+        attention_epsilon: Малое число для численной стабильности attention entropy.
+        enable_attention_entropy: Включает извлечение attention-энтропий.
+        enable_moe_routing: Включает извлечение routing-фичей для MoE-моделей.
+        use_output_attentions: Просит модель возвращать attention maps в forward.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -44,21 +60,18 @@ class FeatureExtractorConfig(BaseModel):
     @field_validator("probe_layers")
     @classmethod
     def validate_probe_layers(cls, value: list[int]) -> list[int]:
-        """Проверяет, что список probe-слоев корректный."""
-        # Нормализуем список: сортируем и убираем дубликаты для стабильного поведения.
+        """Сортирует слои, убирает дубликаты и проверяет границы."""
         normalized_layers: list[int] = sorted(set(value))
         if not normalized_layers:
-            raise ValueError("Список probe_layers не может быть пустым")
-        # Индексы слоев должны быть неотрицательными.
+            raise ValueError("probe_layers не может быть пустым")
         if normalized_layers[0] < 0:
-            raise ValueError("Индексы слоев должны быть неотрицательными")
+            raise ValueError("Индексы probe_layers должны быть неотрицательными")
         return normalized_layers
 
     @field_validator("logit_epsilon", "attention_epsilon")
     @classmethod
     def validate_epsilon(cls, value: float) -> float:
         """Проверяет, что epsilon положительный."""
-        # Epsilon используется в логарифмах, поэтому должен быть > 0.
         if value <= 0.0:
             raise ValueError("Epsilon должен быть положительным")
         return value
@@ -68,25 +81,24 @@ class FeatureExtractorConfig(BaseModel):
         """Создает конфиг из YAML-файла.
 
         Args:
-            fpath: Путь к YAML-файлу.
+            fpath: Путь до YAML-конфига.
 
         Returns:
             Валидированный конфиг.
         """
-        # Загружаем YAML как словарь.
         raw_data: Any = read_yaml(fpath)
         if not isinstance(raw_data, dict):
             raise ValueError("YAML-конфиг должен быть словарем")
-        # Поддерживаем как плоский формат, так и формат с секцией feature_extractor.
+
         payload: Any = raw_data.get("feature_extractor", raw_data)
         if not isinstance(payload, dict):
             raise ValueError("Секция feature_extractor должна быть словарем")
-        # Валидируем итоговый payload через Pydantic.
+
         return cls.model_validate(payload)
 
     @classmethod
     def from_default_yaml(cls) -> FeatureExtractorConfig:
-        """Создает конфиг из дефолтного YAML-файла."""
+        """Создает конфиг из штатного YAML-файла."""
         return cls.from_yaml(fpath=DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH)
 
 
@@ -96,7 +108,7 @@ class FeatureExtractorInput(BaseModel):
     Attributes:
         logits: Логиты модели формы [batch, seq_len, vocab_size].
         input_ids: Токены формы [batch, seq_len].
-        answer_start: Индекс начала токенов ответа.
+        answer_start: Индекс начала токенов ответа внутри последовательности.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -107,24 +119,21 @@ class FeatureExtractorInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_shapes(self) -> FeatureExtractorInput:
-        """Проверяет согласованность входных тензоров."""
-        # Проверяем форму логитов [batch, seq_len, vocab_size].
+        """Проверяет согласованность форм логитов и токенов."""
         if self.logits.ndim != 3:
             raise ValueError("Ожидается logits формы [batch, seq_len, vocab_size]")
-        # Проверяем форму токенов [batch, seq_len].
         if self.input_ids.ndim != 2:
             raise ValueError("Ожидается input_ids формы [batch, seq_len]")
-        # Согласованность batch.
         if self.logits.shape[0] != self.input_ids.shape[0]:
             raise ValueError("batch размер logits и input_ids должен совпадать")
-        # Согласованность длины последовательности.
         if self.logits.shape[1] != self.input_ids.shape[1]:
             raise ValueError("seq_len logits и input_ids должен совпадать")
-        # answer_start должен указывать на позицию внутри ответа, а не в начале промпта.
         if self.answer_start <= 0:
             raise ValueError("answer_start должен быть > 0")
-        if self.answer_start >= self.input_ids.shape[1]:
-            raise ValueError("answer_start должен быть меньше seq_len")
+
+        seq_len: int = int(self.input_ids.shape[1])
+        if self.answer_start >= seq_len:
+            raise ValueError("answer_start должен быть меньше длины последовательности")
         return self
 
 
@@ -133,11 +142,11 @@ class FeatureGroups(BaseModel):
 
     Attributes:
         uncertainty: Статистики неопределенности по токенам ответа.
-        internal_scalars: Внутренние статистики по выбранным слоям.
-        probe_vec: Вектор представления ответа после mean pooling по слоям и токенам.
+        internal_scalars: Поэлементные скаляры из внутренних слоев модели.
+        probe_vec: Усредненный вектор ответа из выбранных probe-слоев.
         attention_entropy: Энтропийные attention-фичи.
-        entropy_drops: Падения logit-lens entropy между соседними probe-слоями.
-        moe_routing: Агрегированные routing-фичи для MoE.
+        entropy_drops: Разности logit-lens энтропий между слоями.
+        moe_routing: Агрегированные routing-фичи для MoE-моделей.
     """
 
     uncertainty: list[float]
@@ -148,14 +157,19 @@ class FeatureGroups(BaseModel):
     moe_routing: list[float]
 
     def to_tensor_dict(self) -> dict[str, torch.Tensor]:
-        # Конвертируем каждую группу фичей в float32 tensor для унифицированной подачи в модель.
-        return {
-            field: torch.tensor(getattr(self, field), dtype=torch.float32)
-            for field in self.model_fields  # noqa
-        }
+        """Конвертирует все группы фичей в float32 tensors."""
+        ordered_fields: tuple[str, ...] = (
+            "uncertainty",
+            "internal_scalars",
+            "probe_vec",
+            "attention_entropy",
+            "entropy_drops",
+            "moe_routing",
+        )
+        return {field_name: torch.tensor(getattr(self, field_name), dtype=torch.float32) for field_name in ordered_fields}
 
 
-class LLMFeatureExtractor(nn.Module):
+class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor"]):
     """Извлекает признаки галлюцинаций из внутреннего состояния LLM."""
 
     def __init__(self, model: Any, config: FeatureExtractorConfig | None = None) -> None:
@@ -166,39 +180,25 @@ class LLMFeatureExtractor(nn.Module):
             config: Настройки извлечения фичей.
         """
         super().__init__()
-        # Базовая LLM, из которой читаем внутренние состояния.
         self.model: Any = model
-        # Конфиг извлечения фичей.
         self.config: FeatureExtractorConfig = config or FeatureExtractorConfig()
-        # Зарегистрированные forward-hooks.
         self._hooks: list[Any] = []
-        # Кэш тензоров, собранных hook-ами (hidden/attention/moe).
         self._hidden: dict[str, torch.Tensor] = {}
 
     @classmethod
     def from_yaml(cls, model: Any, fpath: PathLike) -> LLMFeatureExtractor:
-        """Создает экстрактор по YAML-конфигу.
-
-        Args:
-            model: Causal LM модель.
-            fpath: Путь к YAML-конфигу.
-
-        Returns:
-            Готовый экстрактор.
-        """
+        """Создает экстрактор по YAML-конфигу."""
         return cls(model=model, config=FeatureExtractorConfig.from_yaml(fpath=fpath))
 
     @classmethod
     def from_default_yaml(cls, model: Any) -> LLMFeatureExtractor:
-        """Создает экстрактор по дефолтному YAML-конфигу."""
+        """Создает экстрактор по штатному YAML-конфигу."""
         return cls.from_yaml(model=model, fpath=DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH)
 
     def _extract_tensor(self, output: Any) -> torch.Tensor | None:
-        """Извлекает тензор из выхода хука."""
-        # Частый случай: output уже тензор.
+        """Извлекает первый Tensor из выхода hook-а."""
         if isinstance(output, torch.Tensor):
             return output
-        # Альтернативный случай: output tuple, берем первый тензор.
         if isinstance(output, tuple):
             for element in output:
                 if isinstance(element, torch.Tensor):
@@ -206,60 +206,83 @@ class LLMFeatureExtractor(nn.Module):
         return None
 
     def _extract_attention(self, output: Any) -> torch.Tensor | None:
-        """Извлекает тензор attention weights из выхода self_attn."""
-        # Для attention ожидаем минимум 4 измерения [batch, heads, q_len, k_len].
+        """Извлекает attention weights из выхода self-attention слоя."""
+        if isinstance(output, torch.Tensor):
+            return output
         if isinstance(output, tuple):
-            for element in output:
-                if isinstance(element, torch.Tensor) and element.ndim >= 4:
+            for element in reversed(output):
+                if isinstance(element, torch.Tensor):
                     return element
         return None
 
     def _resolve_moe_router_module(self, layer: Any) -> Any | None:
-        """Ищет модуль роутинга экспертов в слое, если он есть."""
-        # Обычно роутер лежит в MLP.
+        """Находит модуль роутера внутри MLP слоя MoE.
+
+        Исторически разные LLM по-разному называют gate/router module, поэтому
+        здесь используется комбинация явных атрибутов и эвристического поиска.
+        """
         mlp: Any | None = getattr(layer, "mlp", None)
         if mlp is None:
             return None
 
-        # Пробуем стандартные имена атрибутов.
-        for attr_name in ["gate", "router", "router_gate", "moe_gate"]:
+        for attr_name in ("router", "gate", "router_layer", "moe_gate", "expert_gate"):
             candidate: Any | None = getattr(mlp, attr_name, None)
             if candidate is not None and hasattr(candidate, "register_forward_hook"):
                 return candidate
 
-        # Если не нашли, делаем эвристический поиск по вложенным модулям.
         named_modules: list[tuple[str, Any]] = list(getattr(mlp, "named_modules", lambda: [])())
         for module_name, module in named_modules:
             lowered: str = module_name.lower()
             if ("router" in lowered or lowered.endswith(".gate") or lowered == "gate") and hasattr(
-                    module, "register_forward_hook"
+                module,
+                "register_forward_hook",
             ):
                 return module
         return None
 
+    def _get_layers(self) -> Any:
+        """Возвращает список hidden layers модели и валидирует его наличие."""
+        layers: Any = getattr(getattr(self.model, "model", None), "layers", None)
+        if layers is None:
+            raise ValueError("У модели не найден атрибут model.layers")
+        return layers
+
+    def _infer_hidden_size(self) -> int:
+        """Пытается определить размер hidden-state для zero-fallback-ов."""
+        lm_head: Any = getattr(self.model, "lm_head", None)
+        hidden_size: Any = getattr(lm_head, "in_features", None)
+        return int(hidden_size) if hidden_size is not None else 0
+
+    def _infer_device(self) -> torch.device:
+        """Определяет device модели для fallback-тензоров."""
+        first_parameter: Any = next(self.parameters(), None)
+        if isinstance(first_parameter, torch.Tensor):
+            return first_parameter.device
+        return torch.device("cpu")
+
     def attach(self) -> None:
         """Регистрирует forward-hooks на hidden states, attention и MoE routing."""
-        # Перед новым forward очищаем кэш.
+        logger.info("Регистрирую hooks для извлечения фичей")
         self._hidden.clear()
+        layers: Any = self._get_layers()
+        total_layers: int = len(layers)
 
-        # Достаем список слоев из внутренней структуры модели.
-        layers: Any = self.model.model.layers
-
-        # Навешиваем хуки на каждый probe-слой.
         for layer_idx in self.config.probe_layers:
+            if layer_idx < 0 or layer_idx >= total_layers:
+                raise ValueError(f"probe layer {layer_idx} вне диапазона доступных слоев 0..{total_layers - 1}")
+
             layer = layers[layer_idx]
             layer_key: str = f"layer_{layer_idx}"
 
+            # Hook для hidden states.
             def make_hidden_hook(key: str) -> Callable[[Any, Any, Any], None]:
                 def hidden_hook(_module: Any, _input: Any, output: Any) -> None:
-                    # Сохраняем hidden state без графа градиентов.
                     hidden_tensor: torch.Tensor | None = self._extract_tensor(output)
                     if hidden_tensor is not None:
                         self._hidden[key] = hidden_tensor.detach()
 
                 return hidden_hook
 
-            # Базовый hidden hook.
             self._hooks.append(layer.register_forward_hook(make_hidden_hook(layer_key)))
 
             if self.config.enable_attention_entropy:
@@ -267,16 +290,15 @@ class LLMFeatureExtractor(nn.Module):
                 if attn_module is not None and hasattr(attn_module, "register_forward_hook"):
                     attn_key: str = f"attn_{layer_idx}"
 
+                    # Hook для attention maps.
                     def make_attn_hook(key: str) -> Callable[[Any, Any, Any], None]:
                         def attn_hook(_module: Any, _input: Any, output: Any) -> None:
-                            # Сохраняем attention map для энтропийных фичей.
                             attention_tensor: torch.Tensor | None = self._extract_attention(output)
                             if attention_tensor is not None:
                                 self._hidden[key] = attention_tensor.detach()
 
                         return attn_hook
 
-                    # Attention hook.
                     self._hooks.append(attn_module.register_forward_hook(make_attn_hook(attn_key)))
 
             if self.config.enable_moe_routing:
@@ -284,24 +306,22 @@ class LLMFeatureExtractor(nn.Module):
                 if router_module is not None:
                     moe_key: str = f"moe_{layer_idx}"
 
+                    # Hook для выхода router/gate.
                     def make_moe_hook(key: str) -> Callable[[Any, Any, Any], None]:
                         def moe_hook(_module: Any, _input: Any, output: Any) -> None:
-                            # Сохраняем выход роутера экспертов.
                             route_tensor: torch.Tensor | None = self._extract_tensor(output)
                             if route_tensor is not None:
                                 self._hidden[key] = route_tensor.detach()
 
                         return moe_hook
 
-                    # MoE router hook.
                     self._hooks.append(router_module.register_forward_hook(make_moe_hook(moe_key)))
 
     def detach(self) -> None:
         """Удаляет все зарегистрированные hooks."""
-        # Снимаем все активные хуки.
+        logger.info("Снимаю hooks для извлечения фичей")
         for hook in self._hooks:
             hook.remove()
-        # Очищаем реестр хуков.
         self._hooks.clear()
 
     def __enter__(self) -> LLMFeatureExtractor:
@@ -309,12 +329,13 @@ class LLMFeatureExtractor(nn.Module):
         self.attach()
         return self
 
-    def __exit__(self, *_: Any) -> None:
-        """Выключает hooks в контекстном менеджере."""
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        """Снимает hooks при выходе из контекстного менеджера."""
+        _ = (exc_type, exc_value, traceback)
         self.detach()
 
     def forward(self, token_ids: torch.Tensor) -> Any:
-        """Выполняет forward pass модели с нужными флагами.
+        """Выполняет forward-pass модели с попыткой включить attentions.
 
         Args:
             token_ids: Входные токены формы [batch, seq_len].
@@ -322,58 +343,45 @@ class LLMFeatureExtractor(nn.Module):
         Returns:
             Выход модели.
         """
-        # Инференсный режим: градиенты не нужны.
         with torch.no_grad():
-            # Если нужны attention-фичи, пробуем вызвать модель с output_attentions=True.
-            if self.config.use_output_attentions and self.config.enable_attention_entropy:
+            if self.config.use_output_attentions:
                 try:
                     return self.model(token_ids, output_attentions=True)
                 except TypeError:
-                    # Не все модели принимают этот аргумент.
                     logger.warning("Модель не поддерживает output_attentions, продолжаю без attention-выходов")
-            # Базовый fallback.
             return self.model(token_ids)
 
     def _compute_uncertainty_features(
-            self,
-            logits: torch.Tensor,
-            input_ids: torch.Tensor,
-            answer_start: int,
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        answer_start: int,
     ) -> list[float]:
-        """Считает uncertainty фичи по токенам ответа."""
-        # Длина полной последовательности и длина ответа.
+        """Считает uncertainty-фичи по токенам ответа."""
         seq_len: int = int(input_ids.shape[1])
-        n_answer_tokens: int = seq_len - answer_start
-
-        # Логиты на позициях, предсказывающих токены ответа.
-        answer_logits: torch.Tensor = logits[0, answer_start - 1: seq_len - 1, :].float()
-        # Идентификаторы целевых токенов ответа.
+        answer_logits: torch.Tensor = logits[0, answer_start:seq_len, :]
         answer_ids: torch.Tensor = input_ids[0, answer_start:seq_len]
-        # Логвероятности и log-prob правильного токена.
+        n_answer_tokens: int = int(answer_ids.shape[0])
+
         log_probs: torch.Tensor = torch.log_softmax(answer_logits, dim=-1)
         token_log_probs: torch.Tensor = log_probs.gather(1, answer_ids.unsqueeze(1)).squeeze(-1)
 
-        # Вероятности и энтропия распределения.
         probs: torch.Tensor = torch.softmax(answer_logits, dim=-1)
         entropy: torch.Tensor = -(probs * torch.log(probs + self.config.logit_epsilon)).sum(dim=-1)
-        # Агрегаты уверенности.
         top1: torch.Tensor = probs.max(dim=-1).values
         top5: torch.Tensor = probs.topk(min(5, int(probs.shape[-1])), dim=-1).values.sum(dim=-1)
-
-        # Для коротких ответов std фиксируем в 0.0.
         token_std: float = float(token_log_probs.std(unbiased=False).item()) if n_answer_tokens > 1 else 0.0
         entropy_std: float = float(entropy.std(unbiased=False).item()) if n_answer_tokens > 1 else 0.0
 
-        # Возвращаем фиксированный порядок uncertainty-фичей.
         return [
             float(token_log_probs.mean().item()),
             float(token_log_probs.min().item()),
             float(token_log_probs.max().item()),
             token_std,
             float(entropy.mean().item()),
+            float(entropy.min().item()),
             float(entropy.max().item()),
             entropy_std,
-            float(torch.exp(-token_log_probs.mean()).item()),
             float(n_answer_tokens),
             float(token_log_probs[0].item()),
             float(top1.mean().item()),
@@ -381,97 +389,99 @@ class LLMFeatureExtractor(nn.Module):
         ]
 
     def _compute_internal_and_probe(
-            self,
-            answer_start: int,
-            seq_len: int,
+        self,
+        answer_start: int,
+        seq_len: int,
     ) -> tuple[list[float], list[float], list[float]]:
-        """Считает internal скаляры, probe вектор и entropy drops."""
-        # Скалярные признаки по слоям.
+        """Считает internal-скаляры, probe-вектор и entropy drops."""
         internal_scalars: list[float] = []
-        # Векторные представления ответа по слоям.
         probe_vectors: list[torch.Tensor] = []
-        # Энтропии logit-lens по слоям.
         logit_lens_entropies: list[float] = []
+        hidden_size: int = self._infer_hidden_size()
 
         for layer_idx in self.config.probe_layers:
             hidden_key: str = f"layer_{layer_idx}"
-            if hidden_key not in self._hidden:
-                raise ValueError(f"Не найден hidden state для слоя {layer_idx}")
+            hidden_states_raw: torch.Tensor | None = self._hidden.get(hidden_key)
 
-            # Hidden states первого элемента батча.
-            hidden_states: torch.Tensor = self._hidden[hidden_key][0]
-            # Срез токенов ответа.
+            if hidden_states_raw is None:
+                logger.debug("Слой %s не попал в hooks, подставляю нули", layer_idx)
+                internal_scalars.extend([0.0, 0.0, 0.0])
+                probe_vectors.append(torch.zeros(hidden_size, dtype=torch.float32, device=self._infer_device()))
+                logit_lens_entropies.append(0.0)
+                continue
+
+            hidden_states: torch.Tensor = hidden_states_raw[0]
             answer_hidden: torch.Tensor = hidden_states[answer_start:seq_len]
-            # Mean-pooling ответа на текущем слое.
+            if answer_hidden.numel() == 0:
+                logger.debug("Слой %s вернул пустой slice ответа, подставляю нули", layer_idx)
+                internal_scalars.extend([0.0, 0.0, 0.0])
+                probe_vectors.append(torch.zeros(hidden_states.shape[-1], dtype=torch.float32, device=hidden_states.device))
+                logit_lens_entropies.append(0.0)
+                continue
+
             answer_mean: torch.Tensor = answer_hidden.mean(dim=0)
             probe_vectors.append(answer_mean)
 
-            # Нормы как простые внутренние статистики.
             internal_scalars.append(float(hidden_states[answer_start - 1].norm().item()))
             internal_scalars.append(float(answer_hidden.norm(dim=-1).mean().item()))
 
-            # Logit-lens: norm + lm_head над скрытыми состояниями.
-            answer_plus_prompt_hidden: torch.Tensor = hidden_states[answer_start - 1: seq_len - 1].unsqueeze(0)
             with torch.no_grad():
-                layer_logits: torch.Tensor = self.model.lm_head(
-                    self.model.model.norm(answer_plus_prompt_hidden)).float()
-            # Энтропия распределения для logit-lens.
-            layer_probs: torch.Tensor = torch.softmax(layer_logits[0], dim=-1)
-            layer_entropy: torch.Tensor = -(layer_probs * torch.log(layer_probs + self.config.logit_epsilon)).sum(
-                dim=-1)
-            mean_layer_entropy: float = float(layer_entropy.mean().item())
+                layer_logits: torch.Tensor = self.model.lm_head(answer_hidden.unsqueeze(0))
+                layer_probs: torch.Tensor = torch.softmax(layer_logits[0], dim=-1)
+                layer_entropy: torch.Tensor = -(layer_probs * torch.log(layer_probs + self.config.logit_epsilon)).sum(
+                    dim=-1,
+                )
+                mean_layer_entropy: float = float(layer_entropy.mean().item())
             internal_scalars.append(mean_layer_entropy)
             logit_lens_entropies.append(mean_layer_entropy)
 
-        # Итоговый probe-вектор: среднее по выбранным слоям.
         pooled_probe: torch.Tensor = torch.stack(probe_vectors, dim=0).mean(dim=0)
 
-        # Межслойные разности энтропии.
         entropy_drops: list[float] = []
         for index in range(len(logit_lens_entropies) - 1):
             drop_value: float = logit_lens_entropies[index] - logit_lens_entropies[index + 1]
             entropy_drops.append(float(drop_value))
 
-        return internal_scalars, [float(x) for x in pooled_probe.cpu().float().tolist()], entropy_drops
+        return internal_scalars, pooled_probe.tolist(), entropy_drops
 
     def _compute_attention_features(self, answer_start: int, seq_len: int) -> list[float]:
         """Считает attention entropy фичи по probe-слоям."""
-        # Если attention-фичи отключены, возвращаем пустой список.
         if not self.config.enable_attention_entropy:
             return []
 
         attention_features: list[float] = []
         for layer_idx in self.config.probe_layers:
             attention_key: str = f"attn_{layer_idx}"
-            if attention_key not in self._hidden:
-                # Если attention не пришел, подставляем нулевые признаки слоя.
+            attention_tensor_raw: torch.Tensor | None = self._hidden.get(attention_key)
+            if attention_tensor_raw is None:
                 attention_features.extend([0.0, 0.0, 0.0])
                 continue
 
-            attention_tensor: torch.Tensor = self._hidden[attention_key]
-            # Нормализуем формат attention до [heads, q_len, k_len].
+            attention_tensor: torch.Tensor = attention_tensor_raw.float()
             if attention_tensor.ndim == 4:
                 selected_attention: torch.Tensor = attention_tensor[0]
             elif attention_tensor.ndim == 3:
                 selected_attention = attention_tensor
+            elif attention_tensor.ndim == 2:
+                selected_attention = attention_tensor.unsqueeze(0)
             else:
                 attention_features.extend([0.0, 0.0, 0.0])
                 continue
 
-            # Берем только attention для токенов ответа.
-            answer_attention: torch.Tensor = selected_attention[:, answer_start:seq_len, :]
-            # Энтропия распределения внимания по ключам.
-            entropy: torch.Tensor = -(
-                    answer_attention
-                    * torch.log(answer_attention + self.config.attention_epsilon)
-            ).sum(dim=-1)
+            if selected_attention.ndim == 3:
+                answer_attention: torch.Tensor = selected_attention[:, answer_start:seq_len, :]
+            else:
+                answer_attention = selected_attention[answer_start:seq_len, :].unsqueeze(0)
 
-            entropy_std: float = (
-                float(entropy.std(unbiased=False).item())
-                if entropy.numel() > 1
-                else 0.0
-            )
-            # На слой пишем mean/max/std энтропии.
+            if answer_attention.numel() == 0:
+                attention_features.extend([0.0, 0.0, 0.0])
+                continue
+
+            entropy: torch.Tensor = -(
+                answer_attention
+                * torch.log(answer_attention + self.config.attention_epsilon)
+            ).sum(dim=-1)
+            entropy_std: float = float(entropy.std(unbiased=False).item()) if entropy.numel() > 1 else 0.0
             attention_features.extend(
                 [
                     float(entropy.mean().item()),
@@ -483,24 +493,21 @@ class LLMFeatureExtractor(nn.Module):
         return attention_features
 
     def _routing_tensor_to_answer_view(
-            self,
-            routing_tensor: torch.Tensor,
-            answer_start: int,
-            seq_len: int,
+        self,
+        routing_tensor: torch.Tensor,
+        answer_start: int,
+        seq_len: int,
     ) -> torch.Tensor | None:
-        """Приводит роутинг-тензор к форме [answer_tokens, num_experts]."""
-        # Формат [batch, seq_len, experts].
+        """Приводит routing tensor к виду, удобному для анализа токенов ответа."""
         if routing_tensor.ndim == 3:
             if routing_tensor.shape[0] <= 0:
                 return None
             return routing_tensor[0, answer_start:seq_len, :]
 
-        # Формат [seq_len, experts].
         if routing_tensor.ndim == 2:
             return routing_tensor[answer_start:seq_len, :]
 
-        # Сложные форматы приводим к [N, experts] через reshape.
-        if routing_tensor.ndim > 3:
+        if routing_tensor.ndim >= 4:
             last_dim: int = int(routing_tensor.shape[-1])
             flattened: torch.Tensor = routing_tensor.reshape(-1, last_dim)
             answer_len: int = seq_len - answer_start
@@ -512,11 +519,9 @@ class LLMFeatureExtractor(nn.Module):
 
     def _compute_moe_features(self, answer_start: int, seq_len: int) -> list[float]:
         """Считает агрегированные routing-фичи для MoE-моделей."""
-        # Если MoE отключен, фичей нет.
         if not self.config.enable_moe_routing:
             return []
 
-        # Послойные статистики для итоговой агрегации.
         mean_top_prob_by_layer: list[float] = []
         std_top_prob_by_layer: list[float] = []
         mean_entropy_by_layer: list[float] = []
@@ -525,11 +530,11 @@ class LLMFeatureExtractor(nn.Module):
 
         for layer_idx in self.config.probe_layers:
             moe_key: str = f"moe_{layer_idx}"
-            if moe_key not in self._hidden:
+            routing_tensor_raw: torch.Tensor | None = self._hidden.get(moe_key)
+            if routing_tensor_raw is None:
                 continue
 
-            # Берем cached роутинг и приводим к виду [answer_tokens, experts].
-            routing_tensor: torch.Tensor = self._hidden[moe_key].float()
+            routing_tensor: torch.Tensor = routing_tensor_raw.float()
             routing_answer: torch.Tensor | None = self._routing_tensor_to_answer_view(
                 routing_tensor=routing_tensor,
                 answer_start=answer_start,
@@ -538,17 +543,12 @@ class LLMFeatureExtractor(nn.Module):
             if routing_answer is None or routing_answer.numel() == 0:
                 continue
 
-            # Вероятности выбора экспертов.
             routing_probs: torch.Tensor = torch.softmax(routing_answer, dim=-1)
-            # Вероятность лучшего эксперта на токен.
             top_probs: torch.Tensor = routing_probs.max(dim=-1).values
-            # Энтропия распределения по экспертам.
-            routing_entropy: torch.Tensor = -(
-                    routing_probs
-                    * torch.log(routing_probs + self.config.logit_epsilon)
-            ).sum(dim=-1)
-            # Доля уникально использованных экспертов.
             top_experts: torch.Tensor = routing_probs.argmax(dim=-1)
+            routing_entropy: torch.Tensor = -(
+                routing_probs * torch.log(routing_probs + self.config.logit_epsilon)
+            ).sum(dim=-1)
             num_experts: int = int(routing_probs.shape[-1])
             active_ratio: float = float(top_experts.unique().numel() / max(num_experts, 1))
 
@@ -558,12 +558,10 @@ class LLMFeatureExtractor(nn.Module):
             std_entropy_by_layer.append(float(routing_entropy.std(unbiased=False).item()))
             active_ratio_by_layer.append(active_ratio)
 
-        # Если валидных слоев не было, возвращаем нули фиксированного размера.
         if not mean_top_prob_by_layer:
             return [0.0] * 10
 
         def aggregate(values: list[float]) -> tuple[float, float]:
-            # Агрегируем mean/std по списку значений.
             tensor_values: torch.Tensor = torch.tensor(values, dtype=torch.float32)
             return float(tensor_values.mean().item()), float(tensor_values.std(unbiased=False).item())
 
@@ -573,7 +571,6 @@ class LLMFeatureExtractor(nn.Module):
         std_entropy_stats: tuple[float, float] = aggregate(std_entropy_by_layer)
         active_ratio_stats: tuple[float, float] = aggregate(active_ratio_by_layer)
 
-        # Возвращаем 5 пар статистик (mean/std).
         return [
             mean_top_prob_stats[0],
             mean_top_prob_stats[1],
@@ -588,63 +585,47 @@ class LLMFeatureExtractor(nn.Module):
         ]
 
     def extract(
-            self,
-            logits: torch.Tensor,
-            input_ids: torch.Tensor,
-            answer_start: int,
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        answer_start: int,
     ) -> FeatureGroups:
-        """Извлекает полный набор фичей из результатов forward pass.
-
-        Args:
-            logits: Логиты модели формы [batch, seq_len, vocab_size].
-            input_ids: Токены формы [batch, seq_len].
-            answer_start: Индекс начала токенов ответа.
-
-        Returns:
-            Набор фичей по группам.
-        """
-        # Валидируем входные данные в отдельной модели.
+        """Извлекает полный набор фичей из результатов forward pass."""
         validated_input: FeatureExtractorInput = FeatureExtractorInput(
             logits=logits,
             input_ids=input_ids,
             answer_start=answer_start,
         )
-
-        # Считаем длину последовательности для повторного использования.
         seq_len: int = int(validated_input.input_ids.shape[1])
-        # Uncertainty-блок.
-        uncertainty_features: list[float] = self._compute_uncertainty_features(
-            logits=validated_input.logits,
-            input_ids=validated_input.input_ids,
-            answer_start=validated_input.answer_start,
-        )
-        # Hidden/probe/logit-lens блок.
-        internal_scalars, probe_vector, entropy_drops = self._compute_internal_and_probe(
-            answer_start=validated_input.answer_start,
-            seq_len=seq_len,
-        )
-        # Attention-блок.
-        attention_features: list[float] = self._compute_attention_features(
-            answer_start=validated_input.answer_start,
-            seq_len=seq_len,
-        )
-        # MoE-блок.
-        moe_features: list[float] = self._compute_moe_features(
-            answer_start=validated_input.answer_start,
-            seq_len=seq_len,
-        )
 
-        # Очищаем cached состояние после формирования результата.
-        self._hidden.clear()
-
-        return FeatureGroups(
-            uncertainty=uncertainty_features,
-            internal_scalars=internal_scalars,
-            probe_vec=probe_vector,
-            attention_entropy=attention_features,
-            entropy_drops=entropy_drops,
-            moe_routing=moe_features,
-        )
+        try:
+            uncertainty_features: list[float] = self._compute_uncertainty_features(
+                logits=validated_input.logits,
+                input_ids=validated_input.input_ids,
+                answer_start=validated_input.answer_start,
+            )
+            internal_scalars, probe_vector, entropy_drops = self._compute_internal_and_probe(
+                answer_start=validated_input.answer_start,
+                seq_len=seq_len,
+            )
+            attention_features: list[float] = self._compute_attention_features(
+                answer_start=validated_input.answer_start,
+                seq_len=seq_len,
+            )
+            moe_features: list[float] = self._compute_moe_features(
+                answer_start=validated_input.answer_start,
+                seq_len=seq_len,
+            )
+            return FeatureGroups(
+                uncertainty=uncertainty_features,
+                internal_scalars=internal_scalars,
+                probe_vec=probe_vector,
+                attention_entropy=attention_features,
+                entropy_drops=entropy_drops,
+                moe_routing=moe_features,
+            )
+        finally:
+            self._hidden.clear()
 
 
 class DummyFeatureModelConfig(BaseModel):
@@ -653,7 +634,7 @@ class DummyFeatureModelConfig(BaseModel):
     Attributes:
         probe_dim: Размерность вектора `probe_vec`.
         vocab_size: Размер словаря для генерации фиктивных логитов.
-        seed: Начальное значение генератора случайных чисел.
+        seed: Seed для детерминированной генерации случайных значений.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -666,7 +647,6 @@ class DummyFeatureModelConfig(BaseModel):
     @classmethod
     def validate_positive(cls, value: int) -> int:
         """Проверяет, что размерности положительные."""
-        # Размерности фиктивной модели должны быть положительными.
         if value <= 0:
             raise ValueError("Размерность должна быть положительной")
         return value
@@ -676,51 +656,31 @@ class DummyFeatureModel(nn.Module):
     """Генерирует случайные фичи в контракте FeatureGroups для тестов."""
 
     def __init__(
-            self,
-            config: FeatureExtractorConfig | None = None,
-            dummy_config: DummyFeatureModelConfig | None = None,
+        self,
+        config: FeatureExtractorConfig | None = None,
+        dummy_config: DummyFeatureModelConfig | None = None,
     ) -> None:
-        """Инициализирует dummy-модель.
-
-        Args:
-            config: Конфиг экстрактора, задающий размеры групп по слоям.
-            dummy_config: Конфиг генерации случайных данных.
-        """
+        """Инициализирует dummy-модель."""
         super().__init__()
-        # Конфиг определяет размеры групп фичей.
         self.config: FeatureExtractorConfig = config or FeatureExtractorConfig()
-        # Конфиг генерации управляет synthetic-логитами.
         self.dummy_config: DummyFeatureModelConfig = dummy_config or DummyFeatureModelConfig()
-        # Фиксированный генератор для воспроизводимости в тестах.
         self._generator: torch.Generator = torch.Generator()
         self._generator.manual_seed(self.dummy_config.seed)
 
     def _sample_list(self, size: int) -> list[float]:
         """Возвращает список случайных чисел указанной длины."""
-        # Пустую группу возвращаем как пустой список.
         if size <= 0:
             return []
-        # Генерируем нормальное распределение и преобразуем в python-list.
         sampled: torch.Tensor = torch.randn(size, generator=self._generator, dtype=torch.float32)
         return [float(x) for x in sampled.tolist()]
 
-    def forward(self, token_ids: torch.Tensor) -> Any:
-        """Генерирует фиктивный выход модели с случайными логитами.
-
-        Args:
-            token_ids: Входные токены формы [batch, seq_len].
-
-        Returns:
-            Объект с полем `logits` формы [batch, seq_len, vocab_size].
-        """
-        # Поддерживаем входной контракт [batch, seq_len].
+    def forward(self, token_ids: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Генерирует фиктивный выход модели с случайными логитами."""
         if token_ids.ndim != 2:
             raise ValueError("Ожидается token_ids формы [batch, seq_len]")
 
-        # Размерности выходного тензора логитов берем из входа.
         batch_size: int = int(token_ids.shape[0])
         seq_len: int = int(token_ids.shape[1])
-        # Возвращаем фиктивные логиты нужной формы.
         logits: torch.Tensor = torch.randn(
             batch_size,
             seq_len,
@@ -732,65 +692,38 @@ class DummyFeatureModel(nn.Module):
         return {"logits": logits}
 
     def extract(
-            self,
-            logits: torch.Tensor,
-            input_ids: torch.Tensor,
-            answer_start: int,
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        answer_start: int,
     ) -> FeatureGroups:
-        """Игнорирует входы и возвращает случайные фичи нужных размеров.
-
-        Args:
-            logits: Не используется, оставлен для совместимости контракта.
-            input_ids: Не используется, оставлен для совместимости контракта.
-            answer_start: Не используется, оставлен для совместимости контракта.
-
-        Returns:
-            Случайно сгенерированные группы фичей.
-        """
-        # В dummy-реализации входы игнорируются, важен только контракт выхода.
+        """Игнорирует входы и возвращает случайные фичи нужных размеров."""
         _ = (logits, input_ids, answer_start)
 
-        # Размеры групп синхронизированы с реальным экстрактором.
         uncertainty_size: int = 12
         internal_scalars_size: int = len(self.config.probe_layers) * 3
+        probe_vec_size: int = self.dummy_config.probe_dim
         attention_size: int = len(self.config.probe_layers) * 3 if self.config.enable_attention_entropy else 0
         entropy_drops_size: int = max(len(self.config.probe_layers) - 1, 0)
         moe_size: int = 10 if self.config.enable_moe_routing else 0
 
-        # Возвращаем synthetic-группы фичей.
         return FeatureGroups(
             uncertainty=self._sample_list(uncertainty_size),
             internal_scalars=self._sample_list(internal_scalars_size),
-            probe_vec=self._sample_list(self.dummy_config.probe_dim),
+            probe_vec=self._sample_list(probe_vec_size),
             attention_entropy=self._sample_list(attention_size),
             entropy_drops=self._sample_list(entropy_drops_size),
             moe_routing=self._sample_list(moe_size),
         )
 
 
-if __name__ == "__main__":
-    # Небольшой smoke-run для ручной проверки работы dummy-модели.
-    config = FeatureExtractorConfig(
-        probe_layers=[0, 1, 2, 3],
-        enable_attention_entropy=True,
-        enable_moe_routing=True,
-    )
-    # Компактные размеры для быстрого запуска примера.
-    dummy_config = DummyFeatureModelConfig(probe_dim=128, vocab_size=100, seed=123)
-    dummy_model = DummyFeatureModel(config=config, dummy_config=dummy_config)
+__all__ = [
+    "DummyFeatureModel",
+    "DummyFeatureModelConfig",
+    "FeatureExtractorConfig",
+    "FeatureExtractorInput",
+    "FeatureGroups",
+    "LLMFeatureExtractor",
+]
 
-    # Генерируем вход и получаем synthetic-фичи.
-    input_ids: torch.Tensor = torch.randint(low=0, high=100, size=(1, 9), dtype=torch.long)
-    dummy_out: dict[str, torch.Tensor] = dummy_model.forward(input_ids)
-    features = dummy_model.extract(
-        logits=dummy_out["logits"],
-        input_ids=input_ids,
-        answer_start=3,
-    )
 
-    logger.info(f"Неопределенность: {features.uncertainty}")
-    logger.info(f"Внутренние скаляры: {features.internal_scalars}")
-    logger.info(f"Проб-вектор: {features.probe_vec}")
-    logger.info(f"Энтропия внимания: {features.attention_entropy}")
-    logger.info(f"Падения энтропии логитов: {features.entropy_drops}")
-    logger.info(f"MoE роутинг: {features.moe_routing}")

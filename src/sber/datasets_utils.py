@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.files import read_yaml
 from common.logger import SBER_DATASETS_LOGGER as logger
-from common.paths import PathLike, get_sber_gitignore_data_dpath
-from sber.constants import (
+from common.paths import PathLike, get_data_raw_dpath
+from .constants import (
     DEFAULT_DATASET_NAMES,
     DEFAULT_KAGGLE_API_URL_TEMPLATE,
     DEFAULT_RUBQ_ARCHIVE_NAME,
@@ -103,7 +103,7 @@ def get_rubq_local_dir_name(config: SberDatasetsConfig) -> str:
 
 def get_rubq_target_dir(config: SberDatasetsConfig, data_root: PathLike | None = None) -> Path:
     """Возвращает каталог для локального хранения RuBQ."""
-    root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath()) 
+    root: Path = Path(data_root) if data_root is not None else Path(get_data_raw_dpath())
     return root / get_rubq_local_dir_name(config)
 
 
@@ -317,7 +317,7 @@ def load_tape_dataset(
     Возвращает список словарей, чтобы избежать проблем нестрогого schema-casting
     в старых версиях `datasets`.
     """
-    cache_root: Path = Path(data_root) if data_root is not None else Path(get_sber_gitignore_data_dpath())
+    cache_root: Path = Path(data_root) if data_root is not None else Path(get_data_raw_dpath())
     cache_dir: Path = cache_root / config.tape_cache_subdir
     data_files: dict[str, str] = download_tape_data_files(
         config=config,
