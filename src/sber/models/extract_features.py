@@ -22,7 +22,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from torch import nn
 
-from common.files import read_yaml
+from common.configs import load_pydantic_config
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike
 from ..constants import (
@@ -86,15 +86,7 @@ class FeatureExtractorConfig(BaseModel):
         Returns:
             Валидированный конфиг.
         """
-        raw_data: Any = read_yaml(fpath)
-        if not isinstance(raw_data, dict):
-            raise ValueError("YAML-конфиг должен быть словарем")
-
-        payload: Any = raw_data.get("feature_extractor", raw_data)
-        if not isinstance(payload, dict):
-            raise ValueError("Секция feature_extractor должна быть словарем")
-
-        return cls.model_validate(payload)
+        return load_pydantic_config(config_cls=cls, fpath=fpath, section_name="feature_extractor")
 
     @classmethod
     def from_default_yaml(cls) -> FeatureExtractorConfig:
