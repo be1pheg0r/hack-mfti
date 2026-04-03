@@ -46,6 +46,10 @@ def get_data_dpath() -> PathLike:
     """Возвращает корневой каталог данных проекта."""
     return get_project_root() / "data"
 
+@fixdir
+def get_gitignore_data_dpath() -> PathLike:
+    """Возвращает каталог для данных, игнорируемых git."""
+    return get_data_dpath() / "gitignore"
 
 @fixdir
 def get_data_bench_dpath() -> PathLike:
