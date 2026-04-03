@@ -1,0 +1,10 @@
+hf_nli_server:
+  serve_mode: "hf_nli"
+  host: "0.0.0.0"
+  port: 8010
+  repo_id: "be1pheg0r/hack-mfti-sbercase"
+  nli_config_path: "configs/sber/hf_nli_clf.yaml"
+  compute_dtype: "float32"
+  batch_size: 8
+  trust_remote_code: true
+

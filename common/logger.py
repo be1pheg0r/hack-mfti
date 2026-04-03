@@ -60,6 +60,7 @@ class ProjectLoggerRegistry(BaseModel):
         jupyter_notebooks: Логгер для ноутбуков проекта.
         sber_datasets: Логгер для загрузки и подготовки датасетов Sber.
         vllm_server: Логгер для серверного vLLM smoke/production режима.
+        hf_nli_server: Логгер для HTTP-сервера HF NLI классификатора.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -71,6 +72,7 @@ class ProjectLoggerRegistry(BaseModel):
     evaluation: LoggerConfig = LoggerConfig(name="sber-evaluation", level="INFO", prefix="[SBER-EVALUATION 📊] ")
     nli_inference: LoggerConfig = LoggerConfig(name="sber-nli-inference", level="INFO", prefix="[SBER-NLI-INFERENCE 🤖] ")
     vllm_server: LoggerConfig = LoggerConfig(name="vllm-server", level="INFO", prefix="[VLLM 🚀] ")
+    hf_nli_server: LoggerConfig = LoggerConfig(name="hf-nli-server", level="INFO", prefix="[HF-NLI-SERVER 🧠] ")
 
 
 class ColoredFormatter(logging.Formatter):
@@ -171,6 +173,7 @@ SBER_EVALUATION_LOGGER: logging.Logger = get_project_logger("evaluation")
 SBER_NLI_INFERENCE_LOGGER: logging.Logger = get_project_logger("nli_inference")
 
 VLLM_SERVER_LOGGER: logging.Logger = get_project_logger("vllm_server")
+HF_NLI_SERVER_LOGGER: logging.Logger = get_project_logger("hf_nli_server")
 
 
 def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:

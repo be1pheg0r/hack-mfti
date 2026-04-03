@@ -52,3 +52,8 @@ DEFAULT_VLLM_TRUST_REMOTE_CODE: bool = True
 DEFAULT_VLLM_DOWNLOAD_DIR: PathLike | None = None
 DEFAULT_VLLM_SERVE_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "vllm_server.yaml"
 
+DEFAULT_HF_NLI_SERVER_SERVE_MODE: str = "hf_nli"
+DEFAULT_HF_NLI_SERVER_HOST: str = "0.0.0.0"
+DEFAULT_HF_NLI_SERVER_PORT: int = 8010
+DEFAULT_HF_NLI_SERVER_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "hf_nli_server.yaml"
+
