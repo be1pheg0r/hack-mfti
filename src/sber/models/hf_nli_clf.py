@@ -101,7 +101,7 @@ class HFNLIClfBundle:
 
 
 class HFNLIClf:
-    """Классификатор пары `ground_truth`/`model_answer` на галлюцинацию."""
+    """Классификатор пары `correct_answer`/`model_answer` на галлюцинацию."""
 
     def __init__(self, config: HFNLIClfConfig | None = None) -> None:
         self.config: HFNLIClfConfig = config or HFNLIClfConfig.from_default_yaml()

@@ -2,13 +2,8 @@ from __future__ import annotations
 
 import argparse
 import random
-import sys
 from pathlib import Path
 from typing import *
-
-ROOT_DIR: Path = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 import pandas as pd
 import torch
@@ -449,7 +444,7 @@ def run(config: ScriptConfig) -> Path:
                     row: dict[str, Any] = {
                         "sample_id": sample_counter,
                         "query": batch_queries[index_in_batch],
-                        "ground_truth": batch_answers[index_in_batch],
+                        "correct_answer": batch_answers[index_in_batch],
                         "model_answer": model_answer,
                         "temperature": batch_temperature,
                         "hallucination_score": hallucination_score,

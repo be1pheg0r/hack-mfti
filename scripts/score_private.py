@@ -11,10 +11,6 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from tqdm.auto import tqdm
 
-ROOT_DIR: Path = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike, get_data_bench_dpath
 from src.sber.constants import DEFAULT_SBER_HF_MODEL_REPO_ID, DEFAULT_SBER_HF_NLI_CONFIG_FPATH
@@ -25,7 +21,7 @@ class ScoreConfig(BaseModel):
     """Конфигурация скрипта скоринга benchmark-датасета.
 
     Attributes:
-        input_csv: Входной CSV с колонками `ground_truth` и `model_answer`.
+        input_csv: Входной CSV с колонками `correct_answer` и `model_answer`.
         output_csv: Выходной CSV со score-колонками.
         repo_id: Hugging Face repo ID модели-классификатора.
         batch_size: Размер батча для инференса.
@@ -69,14 +65,14 @@ def parse_args() -> ScoreConfig:
 
 
 def score_dataframe(df: pd.DataFrame, repo_id: str, batch_size: int, nli_config_path: PathLike) -> pd.DataFrame:
-    """Скорит DataFrame с колонками `ground_truth` и `model_answer`."""
+    """Скорит DataFrame с колонками `correct_answer` и `model_answer`."""
     nli_config: HFNLIClfConfig = HFNLIClfConfig.from_yaml(nli_config_path).model_copy(
         update={"repo_id": repo_id, "batch_size": batch_size}
     )
     clf: HFNLIClf = HFNLIClf(config=nli_config)
 
-    if "ground_truth" not in df.columns or "model_answer" not in df.columns:
-        raise ValueError("Ожидаются колонки ground_truth и model_answer")
+    if "correct_answer" not in df.columns or "model_answer" not in df.columns:
+        raise ValueError("Ожидаются колонки correct_answer и model_answer")
 
     entailment_scores: list[float] = []
     total_batches: int = (len(df) + batch_size - 1) // batch_size
@@ -85,7 +81,7 @@ def score_dataframe(df: pd.DataFrame, repo_id: str, batch_size: int, nli_config_
     for start in range(0, len(df), batch_size):
         batch = df.iloc[start : start + batch_size]
         scores: list[float] = clf.predict_entailment_proba(
-            premises=batch["ground_truth"].astype(str).tolist(),
+            premises=batch["correct_answer"].astype(str).tolist(),
             hypotheses=batch["model_answer"].astype(str).tolist(),
             batch_size=batch_size,
         )
