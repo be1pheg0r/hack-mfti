@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import *
@@ -7,11 +8,13 @@ from typing import *
 import torch
 from pydantic import BaseModel, ConfigDict, field_validator
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers.utils import logging as hf_logging
 
 from common.configs import load_pydantic_config
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike, get_model_dpath
 from ..constants import (
+    DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE,
     DEFAULT_SBER_HF_MODEL_DIRNAME,
     DEFAULT_SBER_HF_MODEL_REPO_ID,
     DEFAULT_SBER_HF_NLI_BATCH_SIZE,
@@ -36,6 +39,7 @@ class HFNLIClfConfig(BaseModel):
         batch_size: Размер батча для инференса.
         hallucination_threshold: Порог для бинарного предсказания галлюцинации.
         positive_class_index: Индекс положительного класса "галлюцинация".
+        compute_dtype: Тип вычислений для загрузки модели (float32/float16/bfloat16).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -49,6 +53,7 @@ class HFNLIClfConfig(BaseModel):
     batch_size: int = DEFAULT_SBER_HF_NLI_BATCH_SIZE
     hallucination_threshold: float = DEFAULT_SBER_HF_NLI_HALLUCINATION_THRESHOLD
     positive_class_index: int = DEFAULT_SBER_HF_NLI_POSITIVE_CLASS_INDEX
+    compute_dtype: str = DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE
 
     @field_validator("repo_id")
     @classmethod
@@ -78,6 +83,15 @@ class HFNLIClfConfig(BaseModel):
         if value < 0:
             raise ValueError("positive_class_index должен быть неотрицательным")
         return value
+
+    @field_validator("compute_dtype")
+    @classmethod
+    def validate_compute_dtype(cls, value: str) -> str:
+        normalized: str = value.strip().lower()
+        allowed: set[str] = {"float32", "float16", "bfloat16"}
+        if normalized not in allowed:
+            raise ValueError("compute_dtype должен быть одним из: float32, float16, bfloat16")
+        return normalized
 
     @classmethod
     def from_yaml(cls, fpath: PathLike) -> HFNLIClfConfig:
@@ -131,17 +145,44 @@ class HFNLIClf:
         return self.resolve_source()
 
     def _resolve_runtime(self) -> tuple[torch.device, torch.dtype, dict[str, Any]]:
+        dtype_map: dict[str, torch.dtype] = {
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }
+        compute_dtype: torch.dtype = dtype_map[self.config.compute_dtype]
+
         if torch.cuda.is_available():
             gpu_count: int = torch.cuda.device_count()
             torch.backends.cuda.matmul.allow_tf32 = True
-            compute_dtype: torch.dtype = torch.float32
             logger.info("HFNLIClf: GPU=%s, dtype=%s, device=cuda:0", gpu_count, compute_dtype)
             # Для sequence-classification инференса используем один device,
             # чтобы избежать конфликтов input/model тензоров между cuda:0/cuda:1.
             return torch.device("cuda:0"), compute_dtype, {}
 
+        if compute_dtype != torch.float32:
+            logger.info("HFNLIClf: CPU runtime поддерживает только float32, переключаюсь с %s", self.config.compute_dtype)
+            compute_dtype = torch.float32
+
         logger.info("HFNLIClf: GPU не обнаружены, использую CPU")
-        return torch.device("cpu"), torch.float32, {}
+        return torch.device("cpu"), compute_dtype, {}
+
+    @contextmanager
+    def _suppress_transformers_progress_bar(self) -> Iterator[None]:
+        # Подавляем только локальный progress bar загрузки весов, затем
+        # возвращаем исходное состояние, чтобы не влиять на другие части пайплайна.
+        prev_enabled: bool | None = None
+        if hasattr(hf_logging, "is_progress_bar_enabled"):
+            prev_enabled = bool(hf_logging.is_progress_bar_enabled())
+        if hasattr(hf_logging, "disable_progress_bar"):
+            hf_logging.disable_progress_bar()
+        try:
+            yield
+        finally:
+            if prev_enabled is True and hasattr(hf_logging, "enable_progress_bar"):
+                hf_logging.enable_progress_bar()
+            elif prev_enabled is False and hasattr(hf_logging, "disable_progress_bar"):
+                hf_logging.disable_progress_bar()
 
     def load(self) -> HFNLIClfBundle:
         source_path: Path = self.download_checkpoint()
@@ -197,12 +238,13 @@ class HFNLIClf:
             target_dtype = dtype
             target_kwargs = extra_kwargs
 
-        model = AutoModelForSequenceClassification.from_pretrained(
-            str(path),
-            torch_dtype=target_dtype,
-            trust_remote_code=self.config.trust_remote_code,
-            **target_kwargs,
-        )
+        with self._suppress_transformers_progress_bar():
+            model = AutoModelForSequenceClassification.from_pretrained(
+                str(path),
+                torch_dtype=target_dtype,
+                trust_remote_code=self.config.trust_remote_code,
+                **target_kwargs,
+            )
         if not target_kwargs.get("device_map") and target_device is not None:
             model = model.to(target_device)
         model.eval()

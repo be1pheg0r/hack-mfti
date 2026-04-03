@@ -13,7 +13,11 @@ from tqdm.auto import tqdm
 
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike, get_data_bench_dpath
-from src.sber.constants import DEFAULT_SBER_HF_MODEL_REPO_ID, DEFAULT_SBER_HF_NLI_CONFIG_FPATH
+from src.sber.constants import (
+    DEFAULT_SBER_HF_MODEL_REPO_ID,
+    DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE,
+    DEFAULT_SBER_HF_NLI_CONFIG_FPATH,
+)
 from src.sber.models.hf_nli_clf import HFNLIClf, HFNLIClfConfig
 from src.sber.utils.evaluate_utils import evaluate_scoring_results
 
@@ -27,6 +31,7 @@ class ScoreConfig(BaseModel):
         repo_id: Hugging Face repo ID модели-классификатора.
         batch_size: Размер батча для инференса.
         nli_config_path: Путь к YAML-конфигу `HFNLIClf`.
+        compute_dtype: Тип вычислений (float32/float16/bfloat16).
         report_dir: Каталог для текстового отчета и графиков.
         save_plots: Сохранять ли графики оценки.
     """
@@ -38,6 +43,7 @@ class ScoreConfig(BaseModel):
     repo_id: str = DEFAULT_SBER_HF_MODEL_REPO_ID
     batch_size: int = 8
     nli_config_path: PathLike = DEFAULT_SBER_HF_NLI_CONFIG_FPATH
+    compute_dtype: str = DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE
     report_dir: PathLike | None = None
     save_plots: bool = True
 
@@ -56,6 +62,15 @@ class ScoreConfig(BaseModel):
             raise ValueError("batch_size должен быть положительным")
         return value
 
+    @field_validator("compute_dtype")
+    @classmethod
+    def validate_compute_dtype(cls, value: str) -> str:
+        normalized: str = value.strip().lower()
+        allowed: set[str] = {"float32", "float16", "bfloat16"}
+        if normalized not in allowed:
+            raise ValueError("compute_dtype должен быть одним из: float32, float16, bfloat16")
+        return normalized
+
 
 def parse_args() -> ScoreConfig:
     """Парсит CLI-аргументы."""
@@ -65,6 +80,7 @@ def parse_args() -> ScoreConfig:
     parser.add_argument("--repo-id", type=str, default=DEFAULT_SBER_HF_MODEL_REPO_ID)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--nli-config-path", type=str, default=str(DEFAULT_SBER_HF_NLI_CONFIG_FPATH))
+    parser.add_argument("--compute-dtype", type=str, default=DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE)
     parser.add_argument("--report-dir", type=str, default=None)
     parser.add_argument("--save-plots", action=argparse.BooleanOptionalAction, default=True)
     namespace: argparse.Namespace = parser.parse_args()
@@ -76,10 +92,11 @@ def score_dataframe(
     repo_id: str,
     batch_size: int,
     nli_config_path: PathLike,
+    compute_dtype: str,
 ) -> tuple[pd.DataFrame, int]:
     """Скорит DataFrame с колонками `correct_answer` и `model_answer`."""
     nli_config: HFNLIClfConfig = HFNLIClfConfig.from_yaml(nli_config_path).model_copy(
-        update={"repo_id": repo_id, "batch_size": batch_size}
+        update={"repo_id": repo_id, "batch_size": batch_size, "compute_dtype": compute_dtype}
     )
     clf: HFNLIClf = HFNLIClf(config=nli_config)
 
@@ -137,6 +154,7 @@ def run(config: ScoreConfig) -> Path:
         repo_id=config.repo_id,
         batch_size=config.batch_size,
         nli_config_path=config.nli_config_path,
+        compute_dtype=config.compute_dtype,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scored.to_csv(output_path, index=False)
@@ -163,4 +181,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

@@ -6,7 +6,7 @@ from typing import *
 import pandas as pd
 import pytest
 
-from scripts.score_private import score_dataframe
+from scripts.evaluate import score_dataframe
 from src.sber.utils.evaluate_utils import evaluate_scoring_results
 
 
@@ -23,7 +23,7 @@ def test_score_dataframe_adds_prediction_and_timing_columns(monkeypatch: Any) ->
             assert len(premises) == len(hypotheses)
             return [0 for _ in premises]
 
-    monkeypatch.setattr("scripts.score_private.HFNLIClf", DummyClf)
+    monkeypatch.setattr("scripts.evaluate.HFNLIClf", DummyClf)
 
     dataframe = pd.DataFrame(
         {
@@ -38,6 +38,7 @@ def test_score_dataframe_adds_prediction_and_timing_columns(monkeypatch: Any) ->
         repo_id="be1pheg0r/hack-mfti-sbercase",
         batch_size=2,
         nli_config_path=Path("configs/sber/hf_nli_clf.yaml"),
+        compute_dtype="float32",
     )
 
     assert total_batches == 2

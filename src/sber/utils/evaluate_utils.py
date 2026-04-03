@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import *
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -60,6 +61,7 @@ class ClassificationMetrics(BaseModel):
         recall: Recall для класса галлюцинации.
         f1: F1-score для класса галлюцинации.
         average_precision: PR-AUC (Average Precision) по score.
+        weighted_average_precision: Weighted PR-AUC как в notebook-валидации.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -70,6 +72,7 @@ class ClassificationMetrics(BaseModel):
     recall: float | None = None
     f1: float | None = None
     average_precision: float | None = None
+    weighted_average_precision: float | None = None
 
 
 class EvaluationSummary(BaseModel):
@@ -135,15 +138,33 @@ def compute_classification_metrics(
     if label_col not in dataframe.columns:
         return ClassificationMetrics(has_labels=False)
 
-    y_true: list[int] = [int(value) for value in dataframe[label_col].tolist()]
-    y_pred: list[int] = [int(value) for value in dataframe[pred_col].tolist()]
-    y_score: list[float] = [float(value) for value in dataframe[score_col].tolist()]
+    y_true: np.ndarray = np.array([int(value) for value in dataframe[label_col].tolist()], dtype=np.int64)
+    y_pred: np.ndarray = np.array([int(value) for value in dataframe[pred_col].tolist()], dtype=np.int64)
+    y_score: np.ndarray = np.array([float(value) for value in dataframe[score_col].tolist()], dtype=np.float64)
+
+    # Повторяем notebook-логику: невалидные score заменяем на 0.5.
+    if np.any(~np.isfinite(y_score)):
+        y_score = np.nan_to_num(y_score, nan=0.5, posinf=1.0, neginf=0.0)
+
+    pos_rate: float = float(y_true.mean()) if y_true.size else 0.0
+    sample_weight: np.ndarray | None = None
+    if 0.0 < pos_rate < 1.0:
+        pos_weight: float = (1.0 - pos_rate) / pos_rate
+        sample_weight = np.where(y_true == 1, pos_weight, 1.0).astype(np.float64)
 
     average_precision: float | None = None
+    weighted_average_precision: float | None = None
     try:
         average_precision = float(average_precision_score(y_true, y_score))
     except ValueError:
         average_precision = None
+
+    try:
+        weighted_average_precision = float(
+            average_precision_score(y_true, y_score, sample_weight=sample_weight)
+        )
+    except ValueError:
+        weighted_average_precision = None
 
     return ClassificationMetrics(
         has_labels=True,
@@ -152,6 +173,7 @@ def compute_classification_metrics(
         recall=float(recall_score(y_true, y_pred, zero_division=0)),
         f1=float(f1_score(y_true, y_pred, zero_division=0)),
         average_precision=average_precision,
+        weighted_average_precision=weighted_average_precision,
     )
 
 
@@ -268,6 +290,10 @@ def build_text_report(
         lines.append(f"  precision                : {classification.precision:.6f}")
         lines.append(f"  recall                   : {classification.recall:.6f}")
         lines.append(f"  f1                       : {classification.f1:.6f}")
+        if classification.weighted_average_precision is None:
+            lines.append("  weighted_average_precision: n/a")
+        else:
+            lines.append(f"  weighted_average_precision: {classification.weighted_average_precision:.6f}")
         if classification.average_precision is None:
             lines.append("  average_precision        : n/a")
         else:

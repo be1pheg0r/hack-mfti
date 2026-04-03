@@ -193,3 +193,92 @@ def test_hf_nli_clf_uses_float32_on_gpu_runtime(monkeypatch: Any, tmp_path: Path
     assert dummy_model.eval_called is True
 
 
+def test_hf_nli_clf_suppresses_loading_weights_progress_bar(monkeypatch: Any, tmp_path: Path) -> None:
+    source_dir: Path = tmp_path / "hack-mfti-sbercase"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    events: list[str] = []
+
+    class DummyModel:
+        def eval(self) -> DummyModel:
+            return self
+
+        def to(self, _device: torch.device) -> DummyModel:
+            return self
+
+    class DummyTokenizer:
+        padding_side: str | None = None
+        pad_token_id: int | None = 0
+        eos_token: str = "<eos>"
+
+    def fake_is_enabled() -> bool:
+        return True
+
+    def fake_disable() -> None:
+        events.append("disable")
+
+    def fake_enable() -> None:
+        events.append("enable")
+
+    def fake_model_loader(*args: Any, **kwargs: Any) -> DummyModel:
+        events.append("from_pretrained")
+        return DummyModel()
+
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.retrieve_hf_model", lambda **_: source_dir)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoTokenizer.from_pretrained", lambda *args, **kwargs: DummyTokenizer())
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoModelForSequenceClassification.from_pretrained", fake_model_loader)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.hf_logging.is_progress_bar_enabled", fake_is_enabled)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.hf_logging.disable_progress_bar", fake_disable)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.hf_logging.enable_progress_bar", fake_enable)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    clf = HFNLIClf(config=HFNLIClfConfig(cache_root=tmp_path, repo_id="be1pheg0r/hack-mfti-sbercase"))
+    clf.load()
+
+    assert events == ["disable", "from_pretrained", "enable"]
+
+
+def test_hf_nli_clf_restores_progress_bar_on_model_load_error(monkeypatch: Any, tmp_path: Path) -> None:
+    source_dir: Path = tmp_path / "hack-mfti-sbercase"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    events: list[str] = []
+
+    class DummyTokenizer:
+        padding_side: str | None = None
+        pad_token_id: int | None = 0
+        eos_token: str = "<eos>"
+
+    def fake_is_enabled() -> bool:
+        return False
+
+    def fake_disable() -> None:
+        events.append("disable")
+
+    def fake_enable() -> None:
+        events.append("enable")
+
+    def failing_model_loader(*args: Any, **kwargs: Any) -> Any:
+        events.append("from_pretrained")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.retrieve_hf_model", lambda **_: source_dir)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoTokenizer.from_pretrained", lambda *args, **kwargs: DummyTokenizer())
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoModelForSequenceClassification.from_pretrained", failing_model_loader)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.hf_logging.is_progress_bar_enabled", fake_is_enabled)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.hf_logging.disable_progress_bar", fake_disable)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.hf_logging.enable_progress_bar", fake_enable)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    clf = HFNLIClf(config=HFNLIClfConfig(cache_root=tmp_path, repo_id="be1pheg0r/hack-mfti-sbercase"))
+
+    try:
+        clf.load()
+    except RuntimeError as exc:
+        assert str(exc) == "boom"
+    else:
+        assert False, "Ожидалось исключение RuntimeError"
+
+    assert events == ["disable", "from_pretrained", "disable"]
+
+
