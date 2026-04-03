@@ -8,6 +8,7 @@ from .extract_features import (
     FeatureGroups,
     LLMFeatureExtractor,
 )
+from .hf_nli_clf import HFNLIClf, HFNLIClfBundle, HFNLIClfConfig
 from .model_loader import SberHFModelLoader, SberModelBundle
 
 __all__ = [
@@ -16,6 +17,9 @@ __all__ = [
     "FeatureExtractorConfig",
     "FeatureExtractorInput",
     "FeatureGroups",
+    "HFNLIClf",
+    "HFNLIClfBundle",
+    "HFNLIClfConfig",
     "LLMFeatureExtractor",
     "SberHFModelLoader",
     "SberModelBundle",
