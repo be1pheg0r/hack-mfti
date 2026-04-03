@@ -6,7 +6,7 @@ from typing import *
 import torch
 from torch import nn
 
-from sber.pt import DummyFeatureModel, DummyFeatureModelConfig, FeatureExtractorConfig, LLMFeatureExtractor
+from src.sber.models.extract_features import DummyFeatureModel, DummyFeatureModelConfig, FeatureExtractorConfig, LLMFeatureExtractor
 
 
 class DummySelfAttention(nn.Module):
@@ -181,3 +181,5 @@ def test_dummy_feature_model_returns_random_features_with_expected_shapes() -> N
         + features.moe_routing
     )
     assert all(torch.isfinite(torch.tensor(all_values)).tolist())
+
+

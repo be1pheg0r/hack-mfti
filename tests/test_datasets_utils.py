@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import *
 
-from sber.datasets_utils import (
+from src.sber.datasets_utils import (
     SberDatasetsConfig,
     build_tape_data_dir,
     build_tape_data_files,

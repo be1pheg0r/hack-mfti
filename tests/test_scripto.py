@@ -6,7 +6,7 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from sber.script_extract_features_pt import ScriptConfig, _sample_balanced_queries_and_answers, _sample_temperature
+from scripts.extract_features import ScriptConfig, _sample_balanced_queries_and_answers, _sample_temperature
 
 
 def test_sample_temperature_is_deterministic_for_fixed_seed() -> None:
