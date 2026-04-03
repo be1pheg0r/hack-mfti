@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import *
+from typing import Any
 
 import pandas as pd
-import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from tqdm.auto import tqdm
 
@@ -18,8 +17,8 @@ if str(ROOT_DIR) not in sys.path:
 
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike, get_data_bench_dpath
-from src.sber.constants import DEFAULT_SBER_HF_MODEL_REPO_ID
-from src.sber.models.model_loader import SberHFModelLoader
+from src.sber.constants import DEFAULT_SBER_HF_MODEL_REPO_ID, DEFAULT_SBER_HF_NLI_CONFIG_FPATH
+from src.sber.models.hf_nli_clf import HFNLIClf, HFNLIClfConfig
 
 
 class ScoreConfig(BaseModel):
@@ -30,6 +29,7 @@ class ScoreConfig(BaseModel):
         output_csv: Выходной CSV со score-колонками.
         repo_id: Hugging Face repo ID модели-классификатора.
         batch_size: Размер батча для инференса.
+        nli_config_path: Путь к YAML-конфигу `HFNLIClf`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -38,6 +38,7 @@ class ScoreConfig(BaseModel):
     output_csv: PathLike = Field(default_factory=lambda: Path(get_data_bench_dpath()) / "knowledge_bench_private_scores.csv")
     repo_id: str = DEFAULT_SBER_HF_MODEL_REPO_ID
     batch_size: int = 8
+    nli_config_path: PathLike = DEFAULT_SBER_HF_NLI_CONFIG_FPATH
 
     @field_validator("repo_id")
     @classmethod
@@ -62,43 +63,17 @@ def parse_args() -> ScoreConfig:
     parser.add_argument("--output-csv", type=str, default=str(Path(get_data_bench_dpath()) / "knowledge_bench_private_scores.csv"))
     parser.add_argument("--repo-id", type=str, default=DEFAULT_SBER_HF_MODEL_REPO_ID)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--nli-config-path", type=str, default=str(DEFAULT_SBER_HF_NLI_CONFIG_FPATH))
     namespace: argparse.Namespace = parser.parse_args()
     return ScoreConfig.model_validate(vars(namespace))
 
 
-def _resolve_entailment_index(model: Any) -> int:
-    """Пытается определить индекс класса entailment."""
-    id2label: Any = getattr(getattr(model, "config", None), "id2label", None)
-    if isinstance(id2label, dict):
-        for index, label in id2label.items():
-            if str(label).lower() == "entailment":
-                return int(index)
-    return 0
-
-
-def _score_batch(model: Any, tokenizer: Any, premise_batch: list[str], hypothesis_batch: list[str], device: torch.device) -> torch.Tensor:
-    """Возвращает probability entailment для батча пар текстов."""
-    inputs = tokenizer(
-        premise_batch,
-        hypothesis_batch,
-        truncation=True,
-        padding=True,
-        return_tensors="pt",
-    ).to(device)
-    with torch.inference_mode():
-        logits = model(**inputs).logits
-    entailment_idx: int = _resolve_entailment_index(model)
-    probs = torch.softmax(logits.float(), dim=-1)[:, entailment_idx]
-    return probs.detach().cpu()
-
-
-def score_dataframe(df: pd.DataFrame, repo_id: str, batch_size: int) -> pd.DataFrame:
+def score_dataframe(df: pd.DataFrame, repo_id: str, batch_size: int, nli_config_path: PathLike) -> pd.DataFrame:
     """Скорит DataFrame с колонками `ground_truth` и `model_answer`."""
-    loader = SberHFModelLoader(repo_id=repo_id)
-    bundle = loader.load()
-    model = bundle.model
-    tokenizer = bundle.tokenizer
-    device = bundle.device
+    nli_config: HFNLIClfConfig = HFNLIClfConfig.from_yaml(nli_config_path).model_copy(
+        update={"repo_id": repo_id, "batch_size": batch_size}
+    )
+    clf: HFNLIClf = HFNLIClf(config=nli_config)
 
     if "ground_truth" not in df.columns or "model_answer" not in df.columns:
         raise ValueError("Ожидаются колонки ground_truth и model_answer")
@@ -109,14 +84,12 @@ def score_dataframe(df: pd.DataFrame, repo_id: str, batch_size: int) -> pd.DataF
 
     for start in range(0, len(df), batch_size):
         batch = df.iloc[start : start + batch_size]
-        scores = _score_batch(
-            model=model,
-            tokenizer=tokenizer,
-            premise_batch=batch["ground_truth"].astype(str).tolist(),
-            hypothesis_batch=batch["model_answer"].astype(str).tolist(),
-            device=device,
+        scores: list[float] = clf.predict_entailment_proba(
+            premises=batch["ground_truth"].astype(str).tolist(),
+            hypotheses=batch["model_answer"].astype(str).tolist(),
+            batch_size=batch_size,
         )
-        entailment_scores.extend(float(score) for score in scores.tolist())
+        entailment_scores.extend(float(score) for score in scores)
         progress_bar.update(1)
 
     progress_bar.close()
@@ -132,7 +105,12 @@ def run(config: ScoreConfig) -> Path:
     output_path = Path(config.output_csv)
     logger.info("Читаю benchmark: %s", input_path)
     dataframe = pd.read_csv(input_path)
-    scored = score_dataframe(df=dataframe, repo_id=config.repo_id, batch_size=config.batch_size)
+    scored = score_dataframe(
+        df=dataframe,
+        repo_id=config.repo_id,
+        batch_size=config.batch_size,
+        nli_config_path=config.nli_config_path,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scored.to_csv(output_path, index=False)
     logger.info("Сохранил score-файл: %s", output_path)
