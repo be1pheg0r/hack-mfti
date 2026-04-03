@@ -135,8 +135,10 @@ class HFNLIClf:
             gpu_count: int = torch.cuda.device_count()
             torch.backends.cuda.matmul.allow_tf32 = True
             compute_dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            logger.info("HFNLIClf: GPU=%s, dtype=%s, device_map=auto", gpu_count, compute_dtype)
-            return torch.device("cuda:0"), compute_dtype, {"device_map": "auto"}
+            logger.info("HFNLIClf: GPU=%s, dtype=%s, device=cuda:0", gpu_count, compute_dtype)
+            # Для sequence-classification инференса используем один device,
+            # чтобы избежать конфликтов input/model тензоров между cuda:0/cuda:1.
+            return torch.device("cuda:0"), compute_dtype, {}
 
         logger.info("HFNLIClf: GPU не обнаружены, использую CPU")
         return torch.device("cpu"), torch.float32, {}
@@ -146,7 +148,12 @@ class HFNLIClf:
         device, dtype, extra_kwargs = self._resolve_runtime()
 
         tokenizer: Any = self.load_tokenizer(source_path=source_path)
-        model: Any = self.load_model(source_path=source_path, dtype=dtype, extra_kwargs=extra_kwargs)
+        model: Any = self.load_model(
+            source_path=source_path,
+            dtype=dtype,
+            extra_kwargs=extra_kwargs,
+            device=device,
+        )
 
         if device.type == "cpu":
             model = model.to(device)
@@ -175,13 +182,17 @@ class HFNLIClf:
         source_path: Path | None = None,
         dtype: torch.dtype | None = None,
         extra_kwargs: dict[str, Any] | None = None,
+        device: torch.device | None = None,
     ) -> Any:
         """Загружает модель sequence-classification из checkpoint."""
         path: Path = source_path if source_path is not None else self.download_checkpoint()
-        if dtype is None or extra_kwargs is None:
-            _, runtime_dtype, runtime_kwargs = self._resolve_runtime()
+        target_device: torch.device | None = device
+        if dtype is None or extra_kwargs is None or target_device is None:
+            runtime_device, runtime_dtype, runtime_kwargs = self._resolve_runtime()
             target_dtype: torch.dtype = runtime_dtype if dtype is None else dtype
             target_kwargs: dict[str, Any] = runtime_kwargs if extra_kwargs is None else extra_kwargs
+            if target_device is None:
+                target_device = runtime_device
         else:
             target_dtype = dtype
             target_kwargs = extra_kwargs
@@ -192,8 +203,8 @@ class HFNLIClf:
             trust_remote_code=self.config.trust_remote_code,
             **target_kwargs,
         )
-        if not target_kwargs.get("device_map"):
-            model = model.to(torch.device("cpu"))
+        if not target_kwargs.get("device_map") and target_device is not None:
+            model = model.to(target_device)
         model.eval()
         return model
 
