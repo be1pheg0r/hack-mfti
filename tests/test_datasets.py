@@ -70,7 +70,7 @@ def test_ensure_rubq_dataset_creates_json(tmp_path: Path, monkeypatch: Any) -> N
             zip_file.write(generated_file, arcname=config.rubq_json_name)
             generated_file.unlink()
 
-    monkeypatch.setattr("sber.datasets_utils.download_archive", fake_download_archive)
+    monkeypatch.setattr("src.sber.datasets_utils.download_archive", fake_download_archive)
 
     json_fpath: Path = ensure_rubq_dataset(config=config, data_root=tmp_path, force_download=True)
     assert json_fpath.exists()
