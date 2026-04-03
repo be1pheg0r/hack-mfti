@@ -9,36 +9,36 @@ description = "Sber case solution for IT Purple Hack 2026"
 requires-python = ">=3.10, <3.13"
 readme = "README.md"
 dependencies = [
-  "colorama",
-  "pyyaml",
-  "pydantic",
-  "pandas",
-  "scikit-learn",
-  "matplotlib",
-  "seaborn",
-  "datasets",
-  "torch",
-  "transformers",
-  "tqdm",
-  "rapidfuzz",
-  "huggingface-hub",
+    "colorama",
+    "pyyaml",
+    "pydantic",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "datasets",
+    "torch",
+    "transformers",
+    "tqdm",
+    "rapidfuzz",
+    "huggingface-hub",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest",
-  "jupyter",
-  "optuna",
-  "umap-learn",
-  "sentence-transformers",
-  "accelerate",
+    "pytest",
+    "jupyter",
+    "optuna",
+    "umap-learn",
+    "sentence-transformers",
+    "accelerate",
 ]
 mistralai = [
-  "mistralai",
+    "mistralai",
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src", "common" = "common"}
+package-dir = { "" = "src", "src" = "src", "common" = "common" }
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
