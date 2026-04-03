@@ -192,10 +192,11 @@ def _save_histogram(dataframe: pd.DataFrame, score_col: str, output_dpath: Path)
 
 def _save_timing_boxplot(dataframe: pd.DataFrame, time_col: str, output_dpath: Path) -> Path:
     fpath: Path = output_dpath / "sample_time_boxplot.png"
+    sample_time_ms: pd.Series = dataframe[time_col].astype(float) * 1000.0
     plt.figure(figsize=(10, 4))
-    sns.boxplot(x=dataframe[time_col], color="#66aa00")
+    sns.boxplot(x=sample_time_ms, color="#66aa00")
     plt.title("Per-sample Inference Time")
-    plt.xlabel("seconds")
+    plt.xlabel("milliseconds")
     plt.tight_layout()
     plt.savefig(fpath, dpi=140)
     plt.close()
@@ -269,6 +270,11 @@ def build_text_report(
     plots: Sequence[Path],
 ) -> str:
     """Собирает человекочитаемый отчёт по метрикам."""
+    total_inference_ms: float = timing.total_inference_sec * 1000.0
+    mean_sample_ms: float = timing.mean_sample_sec * 1000.0
+    p50_sample_ms: float = timing.p50_sample_sec * 1000.0
+    p95_sample_ms: float = timing.p95_sample_sec * 1000.0
+
     lines: list[str] = []
     lines.append("=" * 88)
     lines.append("SBER NLI SCORING REPORT")
@@ -278,10 +284,10 @@ def build_text_report(
     lines.append("TIMING")
     lines.append(f"  total_samples            : {timing.total_samples}")
     lines.append(f"  total_batches            : {timing.total_batches}")
-    lines.append(f"  total_inference_sec      : {timing.total_inference_sec:.6f}")
-    lines.append(f"  mean_sample_sec          : {timing.mean_sample_sec:.6f}")
-    lines.append(f"  p50_sample_sec           : {timing.p50_sample_sec:.6f}")
-    lines.append(f"  p95_sample_sec           : {timing.p95_sample_sec:.6f}")
+    lines.append(f"  total_inference_ms       : {total_inference_ms:.3f}")
+    lines.append(f"  mean_sample_ms           : {mean_sample_ms:.3f}")
+    lines.append(f"  p50_sample_ms            : {p50_sample_ms:.3f}")
+    lines.append(f"  p95_sample_ms            : {p95_sample_ms:.3f}")
     lines.append(f"  throughput_samples_per_s : {timing.throughput_samples_per_sec:.2f}")
     lines.append("-" * 88)
     lines.append("QUALITY")

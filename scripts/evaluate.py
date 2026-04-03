@@ -11,7 +11,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from tqdm.auto import tqdm
 
-from common.logger import SBER_HOOKS_LOGGER as logger
+from common.logger import SBER_EVALUATION_LOGGER as logger
 from common.paths import PathLike, get_data_bench_dpath
 from src.sber.constants import (
     DEFAULT_SBER_HF_MODEL_REPO_ID,
@@ -156,8 +156,12 @@ def run(config: ScoreConfig) -> Path:
         nli_config_path=config.nli_config_path,
         compute_dtype=config.compute_dtype,
     )
+
+    output_columns: list[str] = [*list(dataframe.columns), "pred_is_hallucination", "t_sample_ms"]
+    export_dataframe: pd.DataFrame = scored.assign(t_sample_ms=scored["t_sample_sec"] * 1000.0)[output_columns]
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    scored.to_csv(output_path, index=False)
+    export_dataframe.to_csv(output_path, index=False)
 
     report_dir: Path = Path(config.report_dir) if config.report_dir is not None else output_path.parent / "reports"
     summary = evaluate_scoring_results(
