@@ -38,10 +38,12 @@ mistralai = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src", "common" = "common"}
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["sber*", "servers*", "common*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
