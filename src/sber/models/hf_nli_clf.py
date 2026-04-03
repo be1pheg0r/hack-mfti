@@ -11,7 +11,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import logging as hf_logging
 
 from common.configs import load_pydantic_config
-from common.logger import SBER_HOOKS_LOGGER as logger
+from common.logger import SBER_NLI_INFERENCE_LOGGER as logger
 from common.paths import PathLike, get_model_dpath
 from ..constants import (
     DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE,

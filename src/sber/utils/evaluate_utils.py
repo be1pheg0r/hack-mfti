@@ -17,6 +17,7 @@ from sklearn.metrics import (
     recall_score,
 )
 
+from common.logger import SBER_EVALUATION_LOGGER as logger
 from common.paths import PathLike
 
 
@@ -241,6 +242,7 @@ def save_score_plots(
     pred_col: str,
 ) -> list[Path]:
     """Сохраняет графики оценки и возвращает пути к ним."""
+    logger.info("Сохраняю графики оценки в %s", output_dpath)
     out_dir: Path = Path(output_dpath)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -330,6 +332,7 @@ def evaluate_scoring_results(
     total_batches: int,
 ) -> EvaluationSummary:
     """Вычисляет метрики/графики и возвращает сводный отчёт."""
+    logger.info("Считаю сводные метрики скоринга")
     sample_times: list[float] = [float(value) for value in dataframe[time_col].tolist()]
     timing: TimingMetrics = compute_timing_metrics(sample_times=sample_times, total_batches=total_batches)
     classification: ClassificationMetrics = compute_classification_metrics(
@@ -361,6 +364,7 @@ def evaluate_scoring_results(
     )
     report_fpath: Path = report_dir / "score_report.txt"
     report_fpath.write_text(report_text, encoding="utf-8")
+    logger.info("Отчет сохранен: %s", report_fpath)
 
     return EvaluationSummary(
         timing=timing,

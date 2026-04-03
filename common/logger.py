@@ -69,6 +69,7 @@ class ProjectLoggerRegistry(BaseModel):
     jupyter_notebooks: LoggerConfig = LoggerConfig(name="jupyter-notebooks", level="INFO", prefix="[JUPYTER 📓] ")
     sber_datasets: LoggerConfig = LoggerConfig(name="sber-datasets", level="INFO", prefix="[SBER-DATASETS 📦] ")
     evaluation: LoggerConfig = LoggerConfig(name="sber-evaluation", level="INFO", prefix="[SBER-EVALUATION 📊] ")
+    nli_inference: LoggerConfig = LoggerConfig(name="sber-nli-inference", level="INFO", prefix="[SBER-NLI-INFERENCE 🤖] ")
     vllm_server: LoggerConfig = LoggerConfig(name="vllm-server", level="INFO", prefix="[VLLM 🚀] ")
 
 
@@ -167,6 +168,7 @@ JUPYTER_LOGGER: logging.Logger = get_project_logger("jupyter_notebooks")
 SBER_HOOKS_LOGGER: logging.Logger = get_project_logger("sber_pt_hooks")
 SBER_DATASETS_LOGGER: logging.Logger = get_project_logger("sber_datasets")
 SBER_EVALUATION_LOGGER: logging.Logger = get_project_logger("evaluation")
+SBER_NLI_INFERENCE_LOGGER: logging.Logger = get_project_logger("nli_inference")
 
 VLLM_SERVER_LOGGER: logging.Logger = get_project_logger("vllm_server")
 
