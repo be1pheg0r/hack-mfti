@@ -65,9 +65,15 @@ def test_hf_nli_clf_loads_bundle_without_network(monkeypatch: Any, tmp_path: Pat
 
     dummy_model = DummyModel()
     dummy_tokenizer = DummyTokenizer()
+    captured_model_kwargs: dict[str, Any] = {}
 
     monkeypatch.setattr("src.sber.models.hf_nli_clf.retrieve_hf_model", lambda **_: source_dir)
-    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoModelForSequenceClassification.from_pretrained", lambda *args, **kwargs: dummy_model)
+
+    def fake_model_loader(*args: Any, **kwargs: Any) -> DummyModel:
+        captured_model_kwargs.update(kwargs)
+        return dummy_model
+
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoModelForSequenceClassification.from_pretrained", fake_model_loader)
     monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoTokenizer.from_pretrained", lambda *args, **kwargs: dummy_tokenizer)
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
 
@@ -87,6 +93,7 @@ def test_hf_nli_clf_loads_bundle_without_network(monkeypatch: Any, tmp_path: Pat
     assert bundle.model is dummy_model
     assert bundle.tokenizer is dummy_tokenizer
     assert bundle.device == torch.device("cpu")
+    assert captured_model_kwargs["torch_dtype"] == torch.float32
     assert dummy_model.eval_called is True
     assert dummy_model.to_device == torch.device("cpu")
     assert dummy_tokenizer.padding_side == "left"
@@ -139,4 +146,50 @@ def test_hf_nli_clf_config_from_yaml(tmp_path: Path) -> None:
     assert config.batch_size == 4
     assert config.hallucination_threshold == 0.4
     assert config.positive_class_index == 1
+
+
+def test_hf_nli_clf_uses_float32_on_gpu_runtime(monkeypatch: Any, tmp_path: Path) -> None:
+    class DummyModel:
+        def __init__(self) -> None:
+            self.eval_called: bool = False
+            self.to_device: torch.device | None = None
+
+        def eval(self) -> DummyModel:
+            self.eval_called = True
+            return self
+
+        def to(self, device: torch.device) -> DummyModel:
+            self.to_device = device
+            return self
+
+    class DummyTokenizer:
+        padding_side: str | None = None
+        pad_token_id: int | None = 0
+        eos_token: str = "<eos>"
+
+    source_dir: Path = tmp_path / "hack-mfti-sbercase"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    dummy_model = DummyModel()
+    captured_model_kwargs: dict[str, Any] = {}
+
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.retrieve_hf_model", lambda **_: source_dir)
+
+    def fake_model_loader(*args: Any, **kwargs: Any) -> DummyModel:
+        captured_model_kwargs.update(kwargs)
+        return dummy_model
+
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoModelForSequenceClassification.from_pretrained", fake_model_loader)
+    monkeypatch.setattr("src.sber.models.hf_nli_clf.AutoTokenizer.from_pretrained", lambda *args, **kwargs: DummyTokenizer())
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
+
+    clf = HFNLIClf(config=HFNLIClfConfig(cache_root=tmp_path, repo_id="be1pheg0r/hack-mfti-sbercase"))
+    bundle = clf.load()
+
+    assert bundle.device == torch.device("cuda:0")
+    assert captured_model_kwargs["torch_dtype"] == torch.float32
+    assert dummy_model.to_device == torch.device("cuda:0")
+    assert dummy_model.eval_called is True
+
 

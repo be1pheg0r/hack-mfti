@@ -134,7 +134,7 @@ class HFNLIClf:
         if torch.cuda.is_available():
             gpu_count: int = torch.cuda.device_count()
             torch.backends.cuda.matmul.allow_tf32 = True
-            compute_dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            compute_dtype: torch.dtype = torch.float32
             logger.info("HFNLIClf: GPU=%s, dtype=%s, device=cuda:0", gpu_count, compute_dtype)
             # Для sequence-classification инференса используем один device,
             # чтобы избежать конфликтов input/model тензоров между cuda:0/cuda:1.

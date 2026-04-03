@@ -2,9 +2,11 @@ from __future__ import annotations
 
 """Helpers for retrieving Sber HF models into a local gitignored cache."""
 
+import warnings
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
+from huggingface_hub.utils import disable_progress_bars
 
 from common.logger import SBER_HOOKS_LOGGER as logger
 from common.paths import PathLike, get_model_dpath
@@ -46,14 +48,20 @@ def retrieve_hf_model(
         return target_dir
 
     logger.info("Скачиваю модель %s в %s", repo_id, target_dir)
-    downloaded_path: str = snapshot_download(
-        repo_id=repo_id,
-        local_dir=str(target_dir),
-        local_dir_use_symlinks=False,
-        force_download=force_download,
-        revision=revision,
-        repo_type="model",
-    )
+    disable_progress_bars()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*unauthenticated requests to the HF Hub.*",
+            category=UserWarning,
+        )
+        downloaded_path: str = snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(target_dir),
+            force_download=force_download,
+            revision=revision,
+            repo_type="model",
+        )
     result_path: Path = Path(downloaded_path)
     logger.info("Модель скачана: %s", result_path)
     return result_path
