@@ -68,6 +68,16 @@ def get_configs_dpath() -> PathLike:
     """Возвращает каталог конфигураций проекта."""
     return get_project_root() / "configs"
 
+@fixdir
+def get_sber_configs_dpath() -> PathLike:
+    """Возвращает каталог конфигураций для Sber-кейса."""
+    return get_configs_dpath() / "sber"
+
+@fixdir
+def get_servers_configs_dpath() -> PathLike:
+    """Возвращает каталог конфигураций серверов."""
+    return get_configs_dpath() / "servers"
+
 
 @fixdir
 def get_model_dpath() -> PathLike:
