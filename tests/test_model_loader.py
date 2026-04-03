@@ -31,7 +31,7 @@ def test_hf_nli_clf_loads_bundle_without_network(monkeypatch: Any, tmp_path: Pat
         ) -> DummyTokenizer._Encoded:
             assert truncation is True
             assert max_length == 16
-            assert padding is True
+            assert padding == "max_length"
             assert return_tensors == "pt"
             assert len(premises) == len(hypotheses)
             batch_size: int = len(premises)
@@ -93,10 +93,10 @@ def test_hf_nli_clf_loads_bundle_without_network(monkeypatch: Any, tmp_path: Pat
     assert bundle.model is dummy_model
     assert bundle.tokenizer is dummy_tokenizer
     assert bundle.device == torch.device("cpu")
-    assert captured_model_kwargs["torch_dtype"] == torch.float32
+    assert captured_model_kwargs["dtype"] == torch.float32
     assert dummy_model.eval_called is True
     assert dummy_model.to_device == torch.device("cpu")
-    assert dummy_tokenizer.padding_side == "left"
+    assert dummy_tokenizer.padding_side in (None, "right")
     assert dummy_tokenizer.pad_token == "<eos>"
 
     hallucination_scores: list[float] = clf.predict_hallucination_proba(
@@ -188,7 +188,7 @@ def test_hf_nli_clf_uses_float32_on_gpu_runtime(monkeypatch: Any, tmp_path: Path
     bundle = clf.load()
 
     assert bundle.device == torch.device("cuda:0")
-    assert captured_model_kwargs["torch_dtype"] == torch.float32
+    assert captured_model_kwargs["dtype"] == torch.float32
     assert dummy_model.to_device == torch.device("cuda:0")
     assert dummy_model.eval_called is True
 

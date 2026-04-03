@@ -213,7 +213,7 @@ class HFNLIClf:
         """Загружает токенизатор для пары текстов premise-hypothesis."""
         path: Path = source_path if source_path is not None else self.download_checkpoint()
         tokenizer = AutoTokenizer.from_pretrained(str(path), trust_remote_code=self.config.trust_remote_code)
-        tokenizer.padding_side = "left"
+        # Для паритета с notebook оставляем стандартный right padding.
         if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
             tokenizer.pad_token = tokenizer.eos_token
         return tokenizer
@@ -241,7 +241,7 @@ class HFNLIClf:
         with self._suppress_transformers_progress_bar():
             model = AutoModelForSequenceClassification.from_pretrained(
                 str(path),
-                torch_dtype=target_dtype,
+                dtype=target_dtype,
                 trust_remote_code=self.config.trust_remote_code,
                 **target_kwargs,
             )
@@ -284,12 +284,17 @@ class HFNLIClf:
                 batch_hypotheses,
                 truncation=True,
                 max_length=length,
-                padding=True,
+                padding="max_length",
                 return_tensors="pt",
             ).to(bundle.device)
 
             with torch.inference_mode():
-                batch_logits: torch.Tensor = bundle.model(**encoded).logits.float().detach().cpu()
+                if bundle.device.type == "cuda":
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        batch_logits = bundle.model(**encoded).logits
+                else:
+                    batch_logits = bundle.model(**encoded).logits
+                batch_logits = batch_logits.float().detach().cpu()
             logits_chunks.append(batch_logits)
 
         return torch.cat(logits_chunks, dim=0)
