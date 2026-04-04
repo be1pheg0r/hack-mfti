@@ -6,7 +6,8 @@ datasets:
   tape_cache_subdir: "tape"
   dataset_names:
     - "rubq-20"
-    - "tape-chegeka.raw"
+    #- "tape-chegeka.raw"
     - "tape-multiq.raw"
   kaggle_api_url_template: "https://www.kaggle.com/api/v1/datasets/download/{dataset_slug}"
+
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import subprocess
 import zipfile
 from pathlib import Path
@@ -122,6 +123,71 @@ def download_archive(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def download_rubq_archive_with_kaggle_api(
+    config: SberDatasetsConfig,
+    *,
+    target_dir: Path,
+    force_download: bool,
+) -> Path:
+    """Скачивает архив RuBQ через Kaggle Python API."""
+    kaggle_module: Any = importlib.import_module("kaggle.api.kaggle_api_extended")
+    kaggle_api_cls: type[Any] = getattr(kaggle_module, "KaggleApi")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    api: Any = kaggle_api_cls()
+    api.authenticate()
+    api.dataset_download_files(
+        dataset=config.rubq_slug,
+        path=str(target_dir),
+        force=force_download,
+        quiet=False,
+        unzip=False,
+    )
+
+    expected_archive: Path = target_dir / config.rubq_archive_name
+    if expected_archive.exists():
+        return expected_archive
+
+    slug_archive: Path = target_dir / f"{get_rubq_local_dir_name(config)}.zip"
+    if slug_archive.exists():
+        if slug_archive != expected_archive:
+            slug_archive.replace(expected_archive)
+        return expected_archive
+
+    archives: list[Path] = sorted(target_dir.glob("*.zip"), key=lambda value: value.stat().st_mtime, reverse=True)
+    if not archives:
+        raise FileNotFoundError("Kaggle API не вернул zip-архив датасета")
+
+    latest_archive: Path = archives[0]
+    if latest_archive != expected_archive:
+        latest_archive.replace(expected_archive)
+    return expected_archive
+
+
+def download_rubq_archive(
+    config: SberDatasetsConfig,
+    *,
+    target_dir: Path,
+    archive_fpath: Path,
+    force_download: bool,
+) -> Path:
+    """Скачивает архив RuBQ: сначала Kaggle API, при ошибке fallback на curl."""
+    try:
+        logger.info("Пробую скачать RuBQ через Kaggle Python API")
+        return download_rubq_archive_with_kaggle_api(
+            config=config,
+            target_dir=target_dir,
+            force_download=force_download,
+        )
+    except Exception as error:
+        logger.warning("Kaggle API недоступен (%s), fallback на curl", error)
+
+    url: str = build_kaggle_download_url(config=config)
+    command: list[str] = build_curl_download_command(url=url, archive_fpath=archive_fpath)
+    download_archive(command=command)
+    return archive_fpath
+
+
 def extract_archive(archive_fpath: PathLike, target_dir: PathLike, remove_archive: bool = False) -> Path:
     """Распаковывает zip-архив в целевой каталог.
 
@@ -172,11 +238,13 @@ def ensure_rubq_dataset(
         logger.info(f"Найден локальный файл датасета: {json_fpath}")
         return json_fpath
 
-    url: str = build_kaggle_download_url(config=config)
-    command: list[str] = build_curl_download_command(url=url, archive_fpath=archive_fpath)
-
-    download_archive(command=command)
-    extract_archive(archive_fpath=archive_fpath, target_dir=target_dir, remove_archive=False)
+    downloaded_archive_fpath: Path = download_rubq_archive(
+        config=config,
+        target_dir=target_dir,
+        archive_fpath=archive_fpath,
+        force_download=force_download,
+    )
+    extract_archive(archive_fpath=downloaded_archive_fpath, target_dir=target_dir, remove_archive=False)
 
     if not json_fpath.exists():
         raise FileNotFoundError(f"После распаковки не найден файл {json_fpath}")

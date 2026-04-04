@@ -23,6 +23,7 @@ dependencies = [
     "rapidfuzz",
     "huggingface-hub",
     "gradio",
+    "kaggle",
 ]
 
 [project.optional-dependencies]

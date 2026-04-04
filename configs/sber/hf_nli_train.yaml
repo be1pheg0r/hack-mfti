@@ -25,7 +25,7 @@ hf_nli_train:
   push_if_better: true
   save_plots: true
   hallucination_threshold: 0.5
-  threshold_search_mode: "none"
+  threshold_search_mode: "optuna"
   threshold_search_beta: 2.0
   threshold_trials: 50
   question_col: null

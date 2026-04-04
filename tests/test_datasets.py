@@ -61,16 +61,25 @@ def test_extract_archive(tmp_path: Path) -> None:
 def test_ensure_rubq_dataset_creates_json(tmp_path: Path, monkeypatch: Any) -> None:
     config = SberDatasetsConfig()
 
-    def fake_download_archive(command: list[str]) -> None:
-        archive_fpath: Path = Path(command[3])
+    def fake_download_rubq_archive(
+        config: SberDatasetsConfig,
+        *,
+        target_dir: Path,
+        archive_fpath: Path,
+        force_download: bool,
+    ) -> Path:
+        _ = config
+        _ = target_dir
+        _ = force_download
         archive_fpath.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(archive_fpath, "w") as zip_file:
             generated_file: Path = archive_fpath.parent / config.rubq_json_name
             generated_file.write_text("[]", encoding="utf-8")
             zip_file.write(generated_file, arcname=config.rubq_json_name)
             generated_file.unlink()
+        return archive_fpath
 
-    monkeypatch.setattr("src.sber.datasets_utils.download_archive", fake_download_archive)
+    monkeypatch.setattr("src.sber.datasets_utils.download_rubq_archive", fake_download_rubq_archive)
 
     json_fpath: Path = ensure_rubq_dataset(config=config, data_root=tmp_path, force_download=True)
     assert json_fpath.exists()
