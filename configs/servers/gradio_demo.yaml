@@ -1,0 +1,10 @@
+gradio_demo:
+  host: "0.0.0.0"
+  port: 7860
+  share: false
+  title: "Sber vLLM + HF NLI Demo"
+  vllm_base_url: "http://127.0.0.1:8000"
+  vllm_model_name: "ai-sage/GigaChat3-10B-A1.8B-bf16"
+  hf_nli_base_url: "http://127.0.0.1:8010"
+  timeout_sec: 60.0
+

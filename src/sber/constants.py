@@ -57,3 +57,12 @@ DEFAULT_HF_NLI_SERVER_HOST: str = "0.0.0.0"
 DEFAULT_HF_NLI_SERVER_PORT: int = 8010
 DEFAULT_HF_NLI_SERVER_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "hf_nli_server.yaml"
 
+DEFAULT_GRADIO_DEMO_HOST: str = "0.0.0.0"
+DEFAULT_GRADIO_DEMO_PORT: int = 7860
+DEFAULT_GRADIO_DEMO_SHARE: bool = False
+DEFAULT_GRADIO_DEMO_TITLE: str = "Sber vLLM + HF NLI Demo"
+DEFAULT_GRADIO_DEMO_VLLM_BASE_URL: str = "http://127.0.0.1:8000"
+DEFAULT_GRADIO_DEMO_HF_NLI_BASE_URL: str = "http://127.0.0.1:8010"
+DEFAULT_GRADIO_DEMO_TIMEOUT_SEC: float = 60.0
+DEFAULT_GRADIO_DEMO_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "gradio_demo.yaml"
+

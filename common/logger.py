@@ -61,6 +61,7 @@ class ProjectLoggerRegistry(BaseModel):
         sber_datasets: Логгер для загрузки и подготовки датасетов Sber.
         vllm_server: Логгер для серверного vLLM smoke/production режима.
         hf_nli_server: Логгер для HTTP-сервера HF NLI классификатора.
+        gradio_demo: Логгер для Gradio demo-обвязки серверов vLLM и HF NLI.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -73,6 +74,7 @@ class ProjectLoggerRegistry(BaseModel):
     nli_inference: LoggerConfig = LoggerConfig(name="sber-nli-inference", level="INFO", prefix="[SBER-NLI-INFERENCE 🤖] ")
     vllm_server: LoggerConfig = LoggerConfig(name="vllm-server", level="INFO", prefix="[VLLM 🚀] ")
     hf_nli_server: LoggerConfig = LoggerConfig(name="hf-nli-server", level="INFO", prefix="[HF-NLI-SERVER 🧠] ")
+    gradio_demo: LoggerConfig = LoggerConfig(name="gradio-demo", level="INFO", prefix="[GRADIO-DEMO 🎛️] ")
 
 
 class ColoredFormatter(logging.Formatter):
@@ -174,6 +176,7 @@ SBER_NLI_INFERENCE_LOGGER: logging.Logger = get_project_logger("nli_inference")
 
 VLLM_SERVER_LOGGER: logging.Logger = get_project_logger("vllm_server")
 HF_NLI_SERVER_LOGGER: logging.Logger = get_project_logger("hf_nli_server")
+GRADIO_DEMO_LOGGER: logging.Logger = get_project_logger("gradio_demo")
 
 
 def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:

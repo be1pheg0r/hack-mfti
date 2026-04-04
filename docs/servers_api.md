@@ -92,3 +92,31 @@ curl -X POST "http://127.0.0.1:8010/v1/hf-nli/predict" \
 - `404` для неизвестного endpoint.
 - `400` для невалидного payload (разная длина списков, неверные типы, пустые поля и т.д.).
 
+## 3) Gradio demo (vLLM -> HF NLI)
+
+CLI запуск:
+
+```bash
+python -m src.servers.gradio_demo --config-path configs/servers/gradio_demo.yaml
+```
+
+Что делает demo:
+
+- принимает пользовательский запрос в виджете;
+- отправляет его в `vLLM` по `POST /v1/chat/completions`;
+- берет ответ `vLLM` и отправляет в `HF NLI` по `POST /v1/hf-nli/predict`;
+- выводит текст ответа `vLLM` и итог `HF NLI` (`галлюцинация`/`не галлюцинация`).
+
+Важно: перед запуском demo должны уже быть подняты оба backend-сервера.
+
+Пример с override через CLI:
+
+```bash
+python -m src.servers.gradio_demo \
+  --config-path configs/servers/gradio_demo.yaml \
+  --vllm-base-url http://127.0.0.1:8000 \
+  --hf-nli-base-url http://127.0.0.1:8010 \
+  --host 127.0.0.1 \
+  --port 7860
+```
+

@@ -22,6 +22,7 @@ dependencies = [
     "tqdm",
     "rapidfuzz",
     "huggingface-hub",
+    "gradio",
 ]
 
 [project.optional-dependencies]
