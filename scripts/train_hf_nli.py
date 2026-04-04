@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sklearn.metrics import average_precision_score, f1_score
+from sklearn.metrics import average_precision_score, f1_score, fbeta_score
 from sklearn.utils import resample
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
@@ -70,6 +70,10 @@ class TrainHFNLIConfig(BaseModel):
     min_relative_improvement: float = 0.0
     push_if_better: bool = True
     save_plots: bool = True
+    hallucination_threshold: float = 0.5
+    threshold_search_mode: str = "none"
+    threshold_search_beta: float = 2.0
+    threshold_trials: int = 50
 
     @field_validator(
         "base_model_repo_id",
@@ -121,6 +125,36 @@ class TrainHFNLIConfig(BaseModel):
     def validate_min_relative_improvement(cls, value: float) -> float:
         if value < 0.0:
             raise ValueError("min_relative_improvement должен быть неотрицательным")
+        return value
+
+    @field_validator("hallucination_threshold")
+    @classmethod
+    def validate_hallucination_threshold(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("hallucination_threshold должен быть в диапазоне [0, 1]")
+        return value
+
+    @field_validator("threshold_search_mode")
+    @classmethod
+    def validate_threshold_search_mode(cls, value: str) -> str:
+        normalized: str = value.strip().lower()
+        allowed: set[str] = {"none", "grid", "optuna"}
+        if normalized not in allowed:
+            raise ValueError("threshold_search_mode должен быть одним из: none, grid, optuna")
+        return normalized
+
+    @field_validator("threshold_search_beta")
+    @classmethod
+    def validate_threshold_search_beta(cls, value: float) -> float:
+        if value <= 0.0:
+            raise ValueError("threshold_search_beta должен быть больше нуля")
+        return value
+
+    @field_validator("threshold_trials")
+    @classmethod
+    def validate_threshold_trials(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("threshold_trials должен быть положительным")
         return value
 
     @classmethod
@@ -196,6 +230,10 @@ def parse_args() -> tuple[TrainHFNLIConfig, str | None]:
     parser.add_argument("--report-dir", type=str, default=None)
     parser.add_argument("--push-if-better", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--save-plots", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--hallucination-threshold", type=float, default=None)
+    parser.add_argument("--threshold-search-mode", type=str, default=None)
+    parser.add_argument("--threshold-search-beta", type=float, default=None)
+    parser.add_argument("--threshold-trials", type=int, default=None)
     parser.add_argument("--hf-token", type=str, default=None)
 
     namespace: argparse.Namespace = parser.parse_args()
@@ -533,6 +571,78 @@ def build_metrics_payload(summary: EvaluationSummary) -> dict[str, float | str |
     }
 
 
+def _find_best_threshold_grid(scores: Sequence[float], labels: Sequence[int], beta: float) -> float:
+    y_true: list[int] = [int(value) for value in labels]
+    y_score: list[float] = [float(value) for value in scores]
+    best_threshold: float = 0.5
+    best_metric: float = -1.0
+    for step in range(1, 100):
+        threshold: float = step / 100.0
+        preds: list[int] = [int(score >= threshold) for score in y_score]
+        metric_value: float = float(fbeta_score(y_true, preds, beta=beta, pos_label=1, zero_division=0))
+        if metric_value > best_metric:
+            best_metric = metric_value
+            best_threshold = threshold
+    return best_threshold
+
+
+def _find_best_threshold_optuna(
+    scores: Sequence[float],
+    labels: Sequence[int],
+    *,
+    beta: float,
+    trials: int,
+) -> float:
+    try:
+        import optuna
+    except ImportError:
+        logger.warning("Optuna не установлена, fallback на grid-search threshold")
+        return _find_best_threshold_grid(scores=scores, labels=labels, beta=beta)
+
+    y_true: list[int] = [int(value) for value in labels]
+    y_score: list[float] = [float(value) for value in scores]
+
+    def objective(trial: Any) -> float:
+        threshold: float = float(trial.suggest_float("threshold", 0.01, 0.99))
+        preds: list[int] = [int(score >= threshold) for score in y_score]
+        return float(fbeta_score(y_true, preds, beta=beta, pos_label=1, zero_division=0))
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=trials, show_progress_bar=False)
+    return float(study.best_params["threshold"])
+
+
+def resolve_hallucination_threshold(
+    dataframe: pd.DataFrame,
+    *,
+    threshold_search_mode: str,
+    threshold_search_beta: float,
+    threshold_trials: int,
+    fallback_threshold: float,
+) -> float:
+    if threshold_search_mode == "none" or "is_hallucination" not in dataframe.columns:
+        return fallback_threshold
+
+    scores: list[float] = [float(value) for value in dataframe["hallucination_score"].tolist()]
+    labels: list[int] = [int(value) for value in dataframe["is_hallucination"].tolist()]
+    if threshold_search_mode == "optuna":
+        threshold: float = _find_best_threshold_optuna(
+            scores=scores,
+            labels=labels,
+            beta=threshold_search_beta,
+            trials=threshold_trials,
+        )
+    else:
+        threshold = _find_best_threshold_grid(scores=scores, labels=labels, beta=threshold_search_beta)
+    return threshold
+
+
+def apply_hallucination_threshold(dataframe: pd.DataFrame, *, threshold: float) -> pd.DataFrame:
+    result: pd.DataFrame = dataframe.copy()
+    result["pred_is_hallucination"] = [int(float(score) >= threshold) for score in result["hallucination_score"].tolist()]
+    return result
+
+
 def load_remote_metrics(repo_id: str, metrics_filename: str, token: str | None) -> dict[str, Any] | None:
     """Читает baseline метрики из HF репозитория модели."""
     try:
@@ -657,6 +767,16 @@ def run(config: TrainHFNLIConfig, hf_token: str | None) -> dict[str, Any]:
         autocast_dtype=_DTYPE_MAP[config.eval_autocast_dtype],
     )
 
+    selected_threshold: float = resolve_hallucination_threshold(
+        scored,
+        threshold_search_mode=config.threshold_search_mode,
+        threshold_search_beta=config.threshold_search_beta,
+        threshold_trials=config.threshold_trials,
+        fallback_threshold=config.hallucination_threshold,
+    )
+    scored = apply_hallucination_threshold(scored, threshold=selected_threshold)
+    logger.info("Использую threshold=%.4f (mode=%s)", selected_threshold, config.threshold_search_mode)
+
     report_dir: Path = Path(config.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
     scored_csv: Path = report_dir / "candidate_scores.csv"
@@ -671,6 +791,8 @@ def run(config: TrainHFNLIConfig, hf_token: str | None) -> dict[str, Any]:
     )
 
     metrics_payload: dict[str, Any] = build_metrics_payload(summary)
+    metrics_payload["selected_threshold"] = selected_threshold
+    metrics_payload["threshold_search_mode"] = config.threshold_search_mode
     local_metrics_fpath: Path = report_dir / "candidate_metrics.json"
     local_metrics_fpath.write_text(json.dumps(metrics_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

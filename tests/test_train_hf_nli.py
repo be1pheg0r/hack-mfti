@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from scripts.train_hf_nli import build_balanced_train_df, is_candidate_better
+from scripts.train_hf_nli import (
+    apply_hallucination_threshold,
+    build_balanced_train_df,
+    is_candidate_better,
+    resolve_hallucination_threshold,
+)
 
 
 def test_build_balanced_train_df_downsamples_majority() -> None:
@@ -59,5 +64,38 @@ def test_is_candidate_better_uses_primary_then_secondary() -> None:
         )
         is False
     )
+
+
+def test_resolve_hallucination_threshold_grid_prefers_recall_when_beta_high() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "hallucination_score": [0.49, 0.20, 0.80, 0.30],
+            "is_hallucination": [1, 0, 1, 0],
+            "pred_is_hallucination": [0, 0, 1, 0],
+        }
+    )
+
+    threshold = resolve_hallucination_threshold(
+        dataframe,
+        threshold_search_mode="grid",
+        threshold_search_beta=2.0,
+        threshold_trials=20,
+        fallback_threshold=0.5,
+    )
+
+    assert threshold <= 0.49
+
+
+def test_apply_hallucination_threshold_rebuilds_predictions() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "hallucination_score": [0.2, 0.5, 0.9],
+            "pred_is_hallucination": [1, 1, 0],
+        }
+    )
+
+    result = apply_hallucination_threshold(dataframe, threshold=0.6)
+
+    assert result["pred_is_hallucination"].tolist() == [0, 0, 1]
 
 
