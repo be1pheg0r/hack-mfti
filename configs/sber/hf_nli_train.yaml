@@ -7,7 +7,7 @@ hf_nli_train:
   best_weights_name: "best_hallucination_model.pt"
   max_length: 512
   batch_size: 8
-  epochs: 5
+  epochs: 15
   learning_rate: 1.5e-5
   seed: 42
   compute_dtype: "float32"
@@ -25,13 +25,13 @@ hf_nli_train:
   push_if_better: true
   save_plots: true
   hallucination_threshold: 0.5
-  threshold_search_mode: "optuna"
+  threshold_search_mode: none
   threshold_search_beta: 2.0
   threshold_trials: 50
   question_col: null
   warmup_ratio_per_epoch: 0.1
   feature_head_dropout: 0.1
-  early_stopping_enabled: true
+  early_stopping_enabled: false
   early_stopping_patience: 2
   undersampling_enabled: false
   class_weights_before_balancing: true
