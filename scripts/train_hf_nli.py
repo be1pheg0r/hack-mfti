@@ -20,6 +20,7 @@ from sklearn.utils import resample
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import logging as hf_logging
 
 from common.configs import load_config_from_namespace, load_pydantic_config
 from common.logger import SBER_NLI_TRAIN_LOGGER as logger
@@ -34,6 +35,8 @@ from src.sber.constants import (
 from src.sber.utils.evaluate_utils import EvaluationSummary, evaluate_scoring_results
 from src.sber.utils.text_features import FEATURE_NAMES, QAFeatureExtractor
 
+
+hf_logging.set_verbosity_error()
 
 _DTYPE_MAP: dict[str, torch.dtype] = {
     "float32": torch.float32,
@@ -81,6 +84,7 @@ class TrainHFNLIConfig(BaseModel):
     feature_head_dropout: float = 0.1
     early_stopping_enabled: bool = True
     early_stopping_patience: int = 2
+    undersampling_enabled: bool = False
     class_weights_before_balancing: bool = True
     use_class_weights: bool = True
 
@@ -320,6 +324,7 @@ def parse_args() -> tuple[TrainHFNLIConfig, str | None]:
     parser.add_argument("--feature-head-dropout", type=float, default=None)
     parser.add_argument("--early-stopping-enabled", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--early-stopping-patience", type=int, default=None)
+    parser.add_argument("--undersampling-enabled", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--class-weights-before-balancing", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--use-class-weights", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--hf-token", type=str, default=None)
@@ -464,9 +469,12 @@ def select_class_weight_dataframe(
     train_df_raw: pd.DataFrame,
     train_df_balanced: pd.DataFrame,
     *,
+    undersampling_enabled: bool,
     class_weights_before_balancing: bool,
 ) -> pd.DataFrame:
     """Определяет, на каком train-срезе считать class weights."""
+    if not undersampling_enabled:
+        return train_df_raw
     return train_df_raw if class_weights_before_balancing else train_df_balanced
 
 
@@ -485,6 +493,7 @@ def build_classification_criterion(
     weights_df: pd.DataFrame = select_class_weight_dataframe(
         train_df_raw=train_df_raw,
         train_df_balanced=train_df_balanced,
+        undersampling_enabled=config.undersampling_enabled,
         class_weights_before_balancing=config.class_weights_before_balancing,
     )
     class_weights: np.ndarray = compute_class_weights(weights_df)
@@ -547,7 +556,13 @@ def train_model(config: TrainHFNLIConfig, hf_token: str | None) -> TrainArtifact
     _ = hf_token
     set_seed(config.seed)
     train_df_raw, val_df = load_train_val_data(config)
-    train_df: pd.DataFrame = build_balanced_train_df(train_df_raw, seed=config.seed)
+    if config.undersampling_enabled:
+        train_df: pd.DataFrame = build_balanced_train_df(train_df_raw, seed=config.seed)
+    else:
+        train_df = train_df_raw.sample(frac=1.0, random_state=config.seed).reset_index(drop=True)
+        logger.info(
+            "Undersampling отключен: train без балансировки, class_weights считаются по исходному распределению"
+        )
     question_col_train: str = resolve_question_column(train_df, configured_question_col=config.question_col)
     question_col_val: str = resolve_question_column(val_df, configured_question_col=config.question_col)
     if question_col_train != question_col_val:

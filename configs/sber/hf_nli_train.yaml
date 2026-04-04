@@ -33,6 +33,7 @@ hf_nli_train:
   feature_head_dropout: 0.1
   early_stopping_enabled: true
   early_stopping_patience: 2
+  undersampling_enabled: false
   class_weights_before_balancing: true
   use_class_weights: true
 

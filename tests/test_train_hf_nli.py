@@ -109,17 +109,26 @@ def test_select_class_weight_dataframe_can_use_raw_or_balanced() -> None:
     raw_df = pd.DataFrame({"is_hallucination": [1, 1, 1, 0]})
     balanced_df = pd.DataFrame({"is_hallucination": [1, 0]})
 
+    selected_without_undersampling = select_class_weight_dataframe(
+        train_df_raw=raw_df,
+        train_df_balanced=balanced_df,
+        undersampling_enabled=False,
+        class_weights_before_balancing=False,
+    )
     selected_raw = select_class_weight_dataframe(
         train_df_raw=raw_df,
         train_df_balanced=balanced_df,
+        undersampling_enabled=True,
         class_weights_before_balancing=True,
     )
     selected_balanced = select_class_weight_dataframe(
         train_df_raw=raw_df,
         train_df_balanced=balanced_df,
+        undersampling_enabled=True,
         class_weights_before_balancing=False,
     )
 
+    assert selected_without_undersampling is raw_df
     assert selected_raw is raw_df
     assert selected_balanced is balanced_df
 
