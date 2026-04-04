@@ -6,7 +6,7 @@ from typing import *
 import pandas as pd
 import pytest
 
-from scripts.evaluate import score_dataframe
+from scripts.evaluate import _resolve_threshold, score_dataframe
 from src.sber.utils.evaluate_utils import evaluate_scoring_results
 
 
@@ -81,5 +81,28 @@ def test_evaluate_scoring_results_writes_report_and_plots(tmp_path: Path) -> Non
     assert "SBER NLI SCORING REPORT" in summary.report_text
     assert len(summary.plots) >= 2
     assert all(path.exists() for path in summary.plots)
+
+
+def test_threshold_search_grid_updates_predictions_for_recall_priority() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "hallucination_score": [0.49, 0.20, 0.80, 0.30],
+            "confidence": [0.8, 0.8, 0.8, 0.8],
+            "is_hallucination": [1, 0, 1, 0],
+            "pred_is_hallucination": [0, 0, 1, 0],
+        }
+    )
+
+    threshold = _resolve_threshold(
+        dataframe=dataframe,
+        threshold_search_mode="grid",
+        threshold_search_beta=2.0,
+        threshold_trials=20,
+        fallback_threshold=0.5,
+        confidence_floor=0.0,
+    )
+
+    assert threshold <= 0.49
+    assert dataframe["pred_is_hallucination"].tolist() == [1, 0, 1, 0]
 
 
