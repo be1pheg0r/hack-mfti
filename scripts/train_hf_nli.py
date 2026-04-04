@@ -808,7 +808,7 @@ def _find_best_threshold_optuna(
     def objective(trial: Any) -> float:
         threshold: float = float(trial.suggest_float("threshold", 0.01, 0.99))
         preds: list[int] = [int(score >= threshold) for score in y_score]
-        return float(fbeta_score(y_true, preds, beta=beta, pos_label=1, zero_division=0))
+        return f1_score(y_true, preds, pos_label=1, zero_division=0)
 
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=trials, show_progress_bar=False)

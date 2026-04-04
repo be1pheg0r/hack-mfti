@@ -135,12 +135,8 @@ def build_generation_messages(query: str) -> list[dict[str, str]]:
     """Формирует сообщения для генерации ответа на вопрос."""
     return [
         {
-            "role": "system",
-            "content": "Ты отвечаешь на вопросы фактологично и кратко. Если не уверен, укажи это явно.",
-        },
-        {
             "role": "user",
-            "content": f"Вопрос: {query}\nДай краткий ответ по существу.",
+            "content": query,
         },
     ]
 
