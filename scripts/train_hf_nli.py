@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ from src.sber.constants import (
     DEFAULT_SBER_HF_NLI_TRAIN_CONFIG_FPATH,
 )
 from src.sber.utils.evaluate_utils import EvaluationSummary, evaluate_scoring_results
+from src.sber.utils.text_features import FEATURE_NAMES, QAFeatureExtractor
 
 
 _DTYPE_MAP: dict[str, torch.dtype] = {
@@ -74,6 +76,13 @@ class TrainHFNLIConfig(BaseModel):
     threshold_search_mode: str = "none"
     threshold_search_beta: float = 2.0
     threshold_trials: int = 50
+    question_col: str | None = None
+    warmup_ratio_per_epoch: float = 0.1
+    feature_head_dropout: float = 0.1
+    early_stopping_enabled: bool = True
+    early_stopping_patience: int = 2
+    class_weights_before_balancing: bool = True
+    use_class_weights: bool = True
 
     @field_validator(
         "base_model_repo_id",
@@ -157,6 +166,20 @@ class TrainHFNLIConfig(BaseModel):
             raise ValueError("threshold_trials должен быть положительным")
         return value
 
+    @field_validator("warmup_ratio_per_epoch", "feature_head_dropout")
+    @classmethod
+    def validate_ratio(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Параметр должен быть в диапазоне [0, 1]")
+        return value
+
+    @field_validator("early_stopping_patience")
+    @classmethod
+    def validate_early_stopping_patience(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("early_stopping_patience должен быть положительным")
+        return value
+
     @classmethod
     def from_yaml(cls, fpath: PathLike) -> TrainHFNLIConfig:
         """Загружает train-конфиг из YAML-файла."""
@@ -170,15 +193,19 @@ class HallucinationDataset(Dataset[Any]):
         self,
         dataframe: pd.DataFrame,
         tokenizer: Any,
+        feature_extractor: QAFeatureExtractor,
         max_length: int,
         *,
+        question_col: str,
         premise_col: str = "correct_answer",
         hypothesis_col: str = "model_answer",
         label_col: str = "is_hallucination",
     ) -> None:
         self.dataframe: pd.DataFrame = dataframe.reset_index(drop=True)
         self.tokenizer: Any = tokenizer
+        self.feature_extractor: QAFeatureExtractor = feature_extractor
         self.max_length: int = max_length
+        self.question_col: str = question_col
         self.premise_col: str = premise_col
         self.hypothesis_col: str = hypothesis_col
         self.label_col: str = label_col
@@ -186,7 +213,7 @@ class HallucinationDataset(Dataset[Any]):
     def __len__(self) -> int:
         return len(self.dataframe)
 
-    def __getitem__(self, index: int) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         row = self.dataframe.iloc[index]
         encoded = self.tokenizer(
             str(row[self.premise_col]),
@@ -197,7 +224,12 @@ class HallucinationDataset(Dataset[Any]):
             return_tensors="pt",
         )
         label: torch.Tensor = torch.tensor(int(row[self.label_col]), dtype=torch.long)
-        return {key: value.squeeze(0) for key, value in encoded.items()}, label
+        feature_vector: list[float] = self.feature_extractor.extract_vector(
+            question=str(row[self.question_col]),
+            answer=str(row[self.hypothesis_col]),
+        ).as_list()
+        tabular_features: torch.Tensor = torch.tensor(feature_vector, dtype=torch.float32)
+        return {key: value.squeeze(0) for key, value in encoded.items()}, label, tabular_features
 
 
 @dataclass(slots=True)
@@ -209,6 +241,55 @@ class TrainArtifacts:
     device: torch.device
     output_dir: Path
     best_weights_fpath: Path
+    feature_extractor: QAFeatureExtractor
+    question_col: str
+
+
+class NLIWithTabularHead(nn.Module):
+    """NLI модель с конкатенацией pooled output и engineered tabular-фичей."""
+
+    def __init__(self, backbone: Any, feature_dim: int, model_dtype: torch.dtype, dropout_prob: float) -> None:
+        super().__init__()
+        self.backbone: Any = backbone
+        hidden_size: int = int(self.backbone.config.hidden_size)
+        self.dropout: nn.Dropout = nn.Dropout(dropout_prob)
+        self.feature_head: nn.Linear = nn.Linear(hidden_size + feature_dim, 2)
+        self.feature_head = self.feature_head.to(dtype=model_dtype)
+        with torch.no_grad():
+            nn.init.xavier_uniform_(self.feature_head.weight)
+            nn.init.zeros_(self.feature_head.bias)
+
+    def forward(self, *, tabular_features: torch.Tensor, **encoded: torch.Tensor) -> torch.Tensor:
+        outputs = self.backbone(**encoded, output_hidden_states=True, return_dict=True)
+        pooled_output: torch.Tensor = outputs.hidden_states[-1][:, 0, :]
+        fused: torch.Tensor = torch.cat([pooled_output.float(), tabular_features.float()], dim=-1)
+        fused = fused.to(self.feature_head.weight.dtype)
+        fused = self.dropout(fused)
+        logits: torch.Tensor = self.feature_head(fused)
+        return logits
+
+    def push_to_hub(self, repo_id: str, *, token: str) -> None:
+        self.backbone.push_to_hub(repo_id, token=token)
+        api: HfApi = HfApi(token=token)
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as temp_file:
+            temp_fpath: Path = Path(temp_file.name)
+        torch.save(self.feature_head.state_dict(), temp_fpath)
+        try:
+            api.upload_file(
+                path_or_fileobj=str(temp_fpath),
+                path_in_repo="tabular_head_state.pt",
+                repo_id=repo_id,
+                repo_type="model",
+            )
+            api.upload_file(
+                path_or_fileobj=json.dumps({"feature_names": FEATURE_NAMES}, ensure_ascii=False, indent=2).encode("utf-8"),
+                path_in_repo="tabular_features_meta.json",
+                repo_id=repo_id,
+                repo_type="model",
+            )
+        finally:
+            if temp_fpath.exists():
+                temp_fpath.unlink()
 
 
 def parse_args() -> tuple[TrainHFNLIConfig, str | None]:
@@ -234,6 +315,13 @@ def parse_args() -> tuple[TrainHFNLIConfig, str | None]:
     parser.add_argument("--threshold-search-mode", type=str, default=None)
     parser.add_argument("--threshold-search-beta", type=float, default=None)
     parser.add_argument("--threshold-trials", type=int, default=None)
+    parser.add_argument("--question-col", type=str, default=None)
+    parser.add_argument("--warmup-ratio-per-epoch", type=float, default=None)
+    parser.add_argument("--feature-head-dropout", type=float, default=None)
+    parser.add_argument("--early-stopping-enabled", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--early-stopping-patience", type=int, default=None)
+    parser.add_argument("--class-weights-before-balancing", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--use-class-weights", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--hf-token", type=str, default=None)
 
     namespace: argparse.Namespace = parser.parse_args()
@@ -271,6 +359,20 @@ def load_train_val_data(config: TrainHFNLIConfig) -> tuple[pd.DataFrame, pd.Data
     return train_df, val_df
 
 
+def resolve_question_column(dataframe: pd.DataFrame, configured_question_col: str | None = None) -> str:
+    """Определяет колонку вопроса для табличных фичей."""
+    if configured_question_col is not None and configured_question_col in dataframe.columns:
+        return configured_question_col
+
+    candidates: list[str] = ["query", "question", "prompt", "user_query"]
+    for candidate in candidates:
+        if candidate in dataframe.columns:
+            return candidate
+
+    logger.warning("Колонка вопроса не найдена, использую correct_answer как fallback")
+    return "correct_answer"
+
+
 def build_balanced_train_df(train_df: pd.DataFrame, seed: int) -> pd.DataFrame:
     """Повторяет notebook-подход: downsample majority до minority."""
     positive: pd.DataFrame = train_df[train_df["is_hallucination"] == 1]
@@ -288,34 +390,41 @@ def build_balanced_train_df(train_df: pd.DataFrame, seed: int) -> pd.DataFrame:
     return balanced
 
 
-def build_model_and_tokenizer(config: TrainHFNLIConfig) -> tuple[Any, Any, torch.device, torch.dtype, torch.dtype]:
-    """Создает backbone + новую classification head как в notebook."""
+def build_model_and_tokenizer(
+    config: TrainHFNLIConfig,
+) -> tuple[NLIWithTabularHead, Any, QAFeatureExtractor, torch.device, torch.dtype, torch.dtype]:
+    """Создает NLI backbone и tabular head для конкатенации pooled output + features."""
     train_dtype: torch.dtype = _DTYPE_MAP[config.compute_dtype]
     eval_autocast_dtype: torch.dtype = _DTYPE_MAP[config.eval_autocast_dtype]
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     tokenizer = AutoTokenizer.from_pretrained(config.base_model_repo_id)
-    model = AutoModelForSequenceClassification.from_pretrained(
+    backbone = AutoModelForSequenceClassification.from_pretrained(
         config.base_model_repo_id,
         num_labels=2,
         ignore_mismatched_sizes=True,
         dtype=train_dtype,
     ).to(device)
 
-    in_features: int = int(model.classifier.in_features)
-    model.classifier = nn.Linear(in_features, 2).to(device=device, dtype=train_dtype)
-    with torch.no_grad():
-        nn.init.xavier_uniform_(model.classifier.weight)
-        nn.init.zeros_(model.classifier.bias)
+    feature_extractor: QAFeatureExtractor = QAFeatureExtractor(tokenizer=tokenizer)
+    model: NLIWithTabularHead = NLIWithTabularHead(
+        backbone=backbone,
+        feature_dim=feature_extractor.feature_dim(),
+        model_dtype=train_dtype,
+        dropout_prob=config.feature_head_dropout,
+    ).to(device)
 
     logger.info("Model init: base=%s, device=%s, dtype=%s", config.base_model_repo_id, device, train_dtype)
-    return model, tokenizer, device, train_dtype, eval_autocast_dtype
+    logger.info("Tabular feature dim=%s, features=%s", feature_extractor.feature_dim(), FEATURE_NAMES)
+    return model, tokenizer, feature_extractor, device, train_dtype, eval_autocast_dtype
 
 
 def build_dataloader(
     dataframe: pd.DataFrame,
     *,
     tokenizer: Any,
+    feature_extractor: QAFeatureExtractor,
+    question_col: str,
     batch_size: int,
     max_length: int,
     shuffle: bool,
@@ -323,7 +432,13 @@ def build_dataloader(
     pin_memory: bool,
 ) -> DataLoader[Any]:
     """Создает DataLoader для HallucinationDataset."""
-    dataset = HallucinationDataset(dataframe, tokenizer=tokenizer, max_length=max_length)
+    dataset = HallucinationDataset(
+        dataframe,
+        tokenizer=tokenizer,
+        feature_extractor=feature_extractor,
+        max_length=max_length,
+        question_col=question_col,
+    )
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -338,6 +453,42 @@ def compute_class_weights(train_df: pd.DataFrame) -> np.ndarray:
     class_counts: np.ndarray = train_df["is_hallucination"].value_counts().sort_index().values.astype(np.float64)
     weights: np.ndarray = 1.0 / class_counts
     return weights / weights.sum()
+
+
+def calculate_warmup_steps(num_batches_per_epoch: int, warmup_ratio_per_epoch: float) -> int:
+    """Считает warmup как долю шагов в пределах одной эпохи."""
+    return int(num_batches_per_epoch * warmup_ratio_per_epoch)
+
+
+def select_class_weight_dataframe(
+    train_df_raw: pd.DataFrame,
+    train_df_balanced: pd.DataFrame,
+    *,
+    class_weights_before_balancing: bool,
+) -> pd.DataFrame:
+    """Определяет, на каком train-срезе считать class weights."""
+    return train_df_raw if class_weights_before_balancing else train_df_balanced
+
+
+def build_classification_criterion(
+    *,
+    train_df_raw: pd.DataFrame,
+    train_df_balanced: pd.DataFrame,
+    config: TrainHFNLIConfig,
+    device: torch.device,
+    train_dtype: torch.dtype,
+) -> nn.CrossEntropyLoss:
+    """Создает criterion с опциональными class weights."""
+    if not config.use_class_weights:
+        return nn.CrossEntropyLoss()
+
+    weights_df: pd.DataFrame = select_class_weight_dataframe(
+        train_df_raw=train_df_raw,
+        train_df_balanced=train_df_balanced,
+        class_weights_before_balancing=config.class_weights_before_balancing,
+    )
+    class_weights: np.ndarray = compute_class_weights(weights_df)
+    return nn.CrossEntropyLoss(weight=torch.tensor(class_weights, device=device, dtype=train_dtype))
 
 
 def evaluate_model(
@@ -356,15 +507,16 @@ def evaluate_model(
     all_labels: list[int] = []
 
     with torch.no_grad():
-        for batch, labels in tqdm(loader, desc="Validation", leave=False):
+        for batch, labels, tabular_features in tqdm(loader, desc="Validation", leave=False):
             batch = {key: value.to(device) for key, value in batch.items()}
             labels = labels.to(device)
+            tabular_features = tabular_features.to(device)
 
             if device.type == "cuda" and autocast_dtype in {torch.float16, torch.bfloat16}:
                 with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                    logits = model(**batch).logits
+                    logits = model(tabular_features=tabular_features, **batch)
             else:
-                logits = model(**batch).logits
+                logits = model(tabular_features=tabular_features, **batch)
 
             probs = torch.softmax(logits.float(), dim=-1)[:, positive_class_index].cpu().numpy()
             preds = logits.argmax(dim=-1).cpu().numpy()
@@ -396,12 +548,18 @@ def train_model(config: TrainHFNLIConfig, hf_token: str | None) -> TrainArtifact
     set_seed(config.seed)
     train_df_raw, val_df = load_train_val_data(config)
     train_df: pd.DataFrame = build_balanced_train_df(train_df_raw, seed=config.seed)
+    question_col_train: str = resolve_question_column(train_df, configured_question_col=config.question_col)
+    question_col_val: str = resolve_question_column(val_df, configured_question_col=config.question_col)
+    if question_col_train != question_col_val:
+        logger.warning("Разные question_col для train/val: %s vs %s", question_col_train, question_col_val)
 
-    model, tokenizer, device, train_dtype, eval_autocast_dtype = build_model_and_tokenizer(config)
+    model, tokenizer, feature_extractor, device, train_dtype, eval_autocast_dtype = build_model_and_tokenizer(config)
 
     train_loader = build_dataloader(
         train_df,
         tokenizer=tokenizer,
+        feature_extractor=feature_extractor,
+        question_col=question_col_train,
         batch_size=config.batch_size,
         max_length=config.max_length,
         shuffle=True,
@@ -411,6 +569,8 @@ def train_model(config: TrainHFNLIConfig, hf_token: str | None) -> TrainArtifact
     val_loader = build_dataloader(
         val_df,
         tokenizer=tokenizer,
+        feature_extractor=feature_extractor,
+        question_col=question_col_val,
         batch_size=config.batch_size,
         max_length=config.max_length,
         shuffle=False,
@@ -419,34 +579,46 @@ def train_model(config: TrainHFNLIConfig, hf_token: str | None) -> TrainArtifact
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.01)
+    warmup_steps: int = calculate_warmup_steps(
+        num_batches_per_epoch=len(train_loader),
+        warmup_ratio_per_epoch=config.warmup_ratio_per_epoch,
+    )
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=int(0.1 * len(train_loader) * config.epochs),
+        num_warmup_steps=warmup_steps,
         num_training_steps=len(train_loader) * config.epochs,
     )
+    logger.info("Scheduler warmup steps=%s (ratio=%.3f per epoch)", warmup_steps, config.warmup_ratio_per_epoch)
 
-    class_weights: np.ndarray = compute_class_weights(train_df)
-    criterion = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, device=device, dtype=train_dtype))
+    criterion = build_classification_criterion(
+        train_df_raw=train_df_raw,
+        train_df_balanced=train_df,
+        config=config,
+        device=device,
+        train_dtype=train_dtype,
+    )
 
     output_dir: Path = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     best_weights_fpath: Path = output_dir / config.best_weights_name
 
     best_ap: float = -1.0
+    epochs_without_improvement: int = 0
     for epoch in range(1, config.epochs + 1):
         model.train()
         total_loss: float = 0.0
-        for batch, labels in tqdm(train_loader, desc=f"Epoch {epoch}/{config.epochs}"):
+        for batch, labels, tabular_features in tqdm(train_loader, desc=f"Epoch {epoch}/{config.epochs}"):
             batch = {key: value.to(device) for key, value in batch.items()}
             labels = labels.to(device)
+            tabular_features = tabular_features.to(device)
 
             optimizer.zero_grad(set_to_none=True)
             if device.type == "cuda" and train_dtype in {torch.float16, torch.bfloat16}:
                 with torch.autocast(device_type="cuda", dtype=train_dtype):
-                    logits = model(**batch).logits
+                    logits = model(tabular_features=tabular_features, **batch)
                     loss = criterion(logits, labels)
             else:
-                logits = model(**batch).logits
+                logits = model(tabular_features=tabular_features, **batch)
                 loss = criterion(logits, labels)
 
             loss.backward()
@@ -471,8 +643,14 @@ def train_model(config: TrainHFNLIConfig, hf_token: str | None) -> TrainArtifact
         )
         if weighted_ap > best_ap:
             best_ap = weighted_ap
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), best_weights_fpath)
             logger.info("Сохранил лучший checkpoint: %s", best_weights_fpath)
+        else:
+            epochs_without_improvement += 1
+            if config.early_stopping_enabled and epochs_without_improvement >= config.early_stopping_patience:
+                logger.info("Early stopping на epoch %s", epoch)
+                break
 
     model.load_state_dict(torch.load(best_weights_fpath, map_location=device))
     model.eval()
@@ -483,6 +661,8 @@ def train_model(config: TrainHFNLIConfig, hf_token: str | None) -> TrainArtifact
         device=device,
         output_dir=output_dir,
         best_weights_fpath=best_weights_fpath,
+        feature_extractor=feature_extractor,
+        question_col=question_col_val,
     )
 
 
@@ -502,6 +682,8 @@ def score_with_trained_model(
     model = artifacts.model
     tokenizer = artifacts.tokenizer
     device = artifacts.device
+    feature_extractor: QAFeatureExtractor = artifacts.feature_extractor
+    question_col: str = artifacts.question_col if artifacts.question_col in dataframe.columns else resolve_question_column(dataframe)
 
     hallucination_scores: list[float] = []
     entailment_scores: list[float] = []
@@ -513,6 +695,7 @@ def score_with_trained_model(
 
     for start in range(0, len(dataframe), batch_size):
         batch = dataframe.iloc[start : start + batch_size]
+        questions: list[str] = batch[question_col].astype(str).tolist()
         premises: list[str] = batch["correct_answer"].astype(str).tolist()
         hypotheses: list[str] = batch["model_answer"].astype(str).tolist()
 
@@ -524,14 +707,19 @@ def score_with_trained_model(
             padding="max_length",
             return_tensors="pt",
         ).to(device)
+        tabular_features: torch.Tensor = feature_extractor.extract_matrix(
+            questions=questions,
+            answers=hypotheses,
+            device=device,
+        )
 
         infer_start: float = time.perf_counter()
         with torch.inference_mode():
             if device.type == "cuda" and autocast_dtype in {torch.float16, torch.bfloat16}:
                 with torch.autocast(device_type="cuda", dtype=autocast_dtype):
-                    logits: torch.Tensor = model(**encoded).logits
+                    logits: torch.Tensor = model(tabular_features=tabular_features, **encoded)
             else:
-                logits = model(**encoded).logits
+                logits = model(tabular_features=tabular_features, **encoded)
             probs: torch.Tensor = torch.softmax(logits.float(), dim=-1)
         infer_end: float = time.perf_counter()
 

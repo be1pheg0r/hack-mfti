@@ -5,8 +5,10 @@ import pandas as pd
 from scripts.train_hf_nli import (
     apply_hallucination_threshold,
     build_balanced_train_df,
+    calculate_warmup_steps,
     is_candidate_better,
     resolve_hallucination_threshold,
+    select_class_weight_dataframe,
 )
 
 
@@ -97,5 +99,28 @@ def test_apply_hallucination_threshold_rebuilds_predictions() -> None:
     result = apply_hallucination_threshold(dataframe, threshold=0.6)
 
     assert result["pred_is_hallucination"].tolist() == [0, 0, 1]
+
+
+def test_calculate_warmup_steps_uses_single_epoch_ratio() -> None:
+    assert calculate_warmup_steps(num_batches_per_epoch=120, warmup_ratio_per_epoch=0.1) == 12
+
+
+def test_select_class_weight_dataframe_can_use_raw_or_balanced() -> None:
+    raw_df = pd.DataFrame({"is_hallucination": [1, 1, 1, 0]})
+    balanced_df = pd.DataFrame({"is_hallucination": [1, 0]})
+
+    selected_raw = select_class_weight_dataframe(
+        train_df_raw=raw_df,
+        train_df_balanced=balanced_df,
+        class_weights_before_balancing=True,
+    )
+    selected_balanced = select_class_weight_dataframe(
+        train_df_raw=raw_df,
+        train_df_balanced=balanced_df,
+        class_weights_before_balancing=False,
+    )
+
+    assert selected_raw is raw_df
+    assert selected_balanced is balanced_df
 
 

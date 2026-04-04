@@ -28,4 +28,11 @@ hf_nli_train:
   threshold_search_mode: "none"
   threshold_search_beta: 2.0
   threshold_trials: 50
+  question_col: null
+  warmup_ratio_per_epoch: 0.1
+  feature_head_dropout: 0.1
+  early_stopping_enabled: true
+  early_stopping_patience: 2
+  class_weights_before_balancing: true
+  use_class_weights: true
 
