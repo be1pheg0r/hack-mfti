@@ -76,6 +76,8 @@ def test_evaluate_scoring_results_writes_report_and_plots(tmp_path: Path) -> Non
     assert summary.classification.has_labels is True
     assert summary.report_fpath is not None
     assert summary.report_fpath.exists()
+    assert summary.misclassified_fpath is not None
+    assert summary.misclassified_fpath.exists()
     assert "SBER NLI SCORING REPORT" in summary.report_text
     assert len(summary.plots) >= 2
     assert all(path.exists() for path in summary.plots)

@@ -84,6 +84,7 @@ class EvaluationSummary(BaseModel):
         classification: Метрики качества классификации.
         report_text: Форматированный текстовый отчет.
         plots: Пути к сохраненным графикам.
+        misclassified_fpath: Путь к CSV с ошибочными сэмплами для hard negative mining.
         report_fpath: Путь к txt-отчету.
     """
 
@@ -93,6 +94,7 @@ class EvaluationSummary(BaseModel):
     classification: ClassificationMetrics
     report_text: str
     plots: list[Path] = Field(default_factory=list)
+    misclassified_fpath: Path | None = None
     report_fpath: Path | None = None
 
 
@@ -264,12 +266,50 @@ def save_score_plots(
     return plots
 
 
+def save_misclassified_samples(
+    dataframe: pd.DataFrame,
+    *,
+    output_dpath: PathLike,
+    label_col: str,
+    pred_col: str,
+    score_col: str,
+) -> Path | None:
+    """Сохраняет ошибки классификации (FP/FN) для hard negative mining."""
+    if label_col not in dataframe.columns:
+        return None
+
+    out_dir: Path = Path(output_dpath)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    labeled: pd.DataFrame = dataframe.copy()
+    labeled[label_col] = labeled[label_col].astype(int)
+    labeled[pred_col] = labeled[pred_col].astype(int)
+    misclassified: pd.DataFrame = labeled[labeled[label_col] != labeled[pred_col]].copy()
+    if misclassified.empty:
+        fpath_empty: Path = out_dir / "misclassified_samples.csv"
+        misclassified.to_csv(fpath_empty, index=False)
+        return fpath_empty
+
+    misclassified["error_type"] = np.where(
+        (misclassified[label_col] == 0) & (misclassified[pred_col] == 1),
+        "false_positive",
+        "false_negative",
+    )
+    if score_col in misclassified.columns:
+        misclassified = misclassified.sort_values(by=score_col, ascending=False)
+    fpath: Path = out_dir / "misclassified_samples.csv"
+    misclassified.to_csv(fpath, index=False)
+    logger.info("Сохранил ошибочные сэмплы: %s", fpath)
+    return fpath
+
+
 def build_text_report(
     *,
     timing: TimingMetrics,
     classification: ClassificationMetrics,
     output_csv_fpath: PathLike,
     plots: Sequence[Path],
+    misclassified_fpath: Path | None,
 ) -> str:
     """Собирает человекочитаемый отчёт по метрикам."""
     total_inference_ms: float = timing.total_inference_sec * 1000.0
@@ -308,6 +348,12 @@ def build_text_report(
             lines.append(f"  average_precision        : {classification.average_precision:.6f}")
     else:
         lines.append("  labels not found: quality metrics are skipped")
+    lines.append("-" * 88)
+    lines.append("HARD NEGATIVE MINING")
+    if misclassified_fpath is None:
+        lines.append("  misclassified_samples: labels not found")
+    else:
+        lines.append(f"  misclassified_samples: {misclassified_fpath}")
     lines.append("-" * 88)
     lines.append("PLOTS")
     if plots:
@@ -356,11 +402,20 @@ def evaluate_scoring_results(
             pred_col=pred_col,
         )
 
+    misclassified_fpath: Path | None = save_misclassified_samples(
+        dataframe=dataframe,
+        output_dpath=report_dir,
+        label_col=label_col,
+        pred_col=pred_col,
+        score_col=score_col,
+    )
+
     report_text: str = build_text_report(
         timing=timing,
         classification=classification,
         output_csv_fpath=output_csv_fpath,
         plots=plots,
+        misclassified_fpath=misclassified_fpath,
     )
     report_fpath: Path = report_dir / "score_report.txt"
     report_fpath.write_text(report_text, encoding="utf-8")
@@ -371,6 +426,7 @@ def evaluate_scoring_results(
         classification=classification,
         report_text=report_text,
         plots=plots,
+        misclassified_fpath=misclassified_fpath,
         report_fpath=report_fpath,
     )
 
@@ -383,6 +439,7 @@ __all__ = [
     "compute_classification_metrics",
     "compute_timing_metrics",
     "evaluate_scoring_results",
+    "save_misclassified_samples",
     "save_score_plots",
 ]
 
