@@ -1,0 +1,27 @@
+hf_nli_train:
+  train_csv: "data/raw/features_with_judge_scores.csv"
+  val_csv: "data/bench/knowledge_bench_public.csv"
+  base_model_repo_id: "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
+  target_repo_id: "be1pheg0r/hack-mfti-sbercase"
+  output_dir: "model/hf_nli_train"
+  best_weights_name: "best_hallucination_model.pt"
+  max_length: 512
+  batch_size: 8
+  epochs: 5
+  learning_rate: 1.5e-5
+  seed: 42
+  compute_dtype: "float32"
+  eval_autocast_dtype: "bfloat16"
+  num_workers: 2
+  pin_memory: true
+  positive_class_index: 1
+  evaluate_batch_size: 8
+  nli_config_path: "configs/sber/hf_nli_clf.yaml"
+  report_dir: "data/bench/reports/train_eval"
+  hf_metrics_filename: "hf_eval_metrics.json"
+  metric_primary: "weighted_average_precision"
+  metric_secondary: "f1"
+  min_relative_improvement: 0.0
+  push_if_better: true
+  save_plots: true
+
