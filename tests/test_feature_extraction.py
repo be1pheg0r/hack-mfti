@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import *
 
+import json
 import random
 from pathlib import Path
 
@@ -12,11 +13,14 @@ from common.paths import get_sber_configs_dpath
 from src.sber.utils.extract_features_cli import (
     ScriptConfig,
     _build_feature_column_names,
+    _coerce_field_to_float_if_needed,
+    _extract_expected_float_field_name,
     _flatten_feature_groups,
     _resolve_query_column_name,
     _sample_balanced_queries_and_answers,
     _sample_dataframe_rows,
     _sample_temperature,
+    _try_patch_model_config_for_float_field,
 )
 from src.sber.models.extract_features import FeatureGroups
 
@@ -89,6 +93,40 @@ def test_sample_dataframe_rows_is_deterministic_for_n() -> None:
 
     assert sampled_a["query"].tolist() == sampled_b["query"].tolist()
     assert len(sampled_a) == 3
+
+
+def test_extract_expected_float_field_name_parses_error_text() -> None:
+    text: str = "TypeError: Field 'routed_scaling_factor' expected float, got int (value: 1)"
+    assert _extract_expected_float_field_name(text) == "routed_scaling_factor"
+
+
+def test_coerce_field_to_float_if_needed_changes_nested_int_fields() -> None:
+    payload: dict[str, Any] = {
+        "routed_scaling_factor": 1,
+        "nested": {"routed_scaling_factor": 2, "other": 3},
+        "items": [{"routed_scaling_factor": 4}],
+    }
+
+    changed: bool = _coerce_field_to_float_if_needed(payload, field_name="routed_scaling_factor")
+
+    assert changed is True
+    assert isinstance(payload["routed_scaling_factor"], float)
+    assert isinstance(payload["nested"]["routed_scaling_factor"], float)
+    assert isinstance(payload["items"][0]["routed_scaling_factor"], float)
+
+
+def test_try_patch_model_config_for_float_field_patches_local_config(tmp_path: Path) -> None:
+    model_dir: Path = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    config_fpath: Path = model_dir / "config.json"
+    config_fpath.write_text('{"routed_scaling_factor": 1}', encoding="utf-8")
+
+    error: Exception = ValueError("Field 'routed_scaling_factor' expected float, got int (value: 1)")
+    patched: bool = _try_patch_model_config_for_float_field(str(model_dir), error)
+
+    assert patched is True
+    patched_payload: dict[str, Any] = json.loads(config_fpath.read_text(encoding="utf-8"))
+    assert isinstance(patched_payload["routed_scaling_factor"], float)
 
 
 def test_balanced_sampling_takes_equal_count_from_each_dataset_and_shuffles() -> None:

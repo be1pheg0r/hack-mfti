@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 from pathlib import Path
 from typing import *
@@ -465,6 +466,120 @@ def _resolve_model_source(model_name: str) -> str:
     return model_name
 
 
+def _extract_expected_float_field_name(error_text: str) -> str | None:
+    """Извлекает имя поля из ошибки вида `Field 'x' expected float, got int`."""
+    marker: str = "Field '"
+    start: int = error_text.find(marker)
+    if start < 0:
+        return None
+    start += len(marker)
+    end: int = error_text.find("'", start)
+    if end < 0:
+        return None
+    return error_text[start:end]
+
+
+def _get_local_config_json_fpath(model_source: str) -> Path | None:
+    """Возвращает локальный путь к config.json для модели, если он доступен."""
+    source_path: Path = Path(model_source)
+    if source_path.exists() and source_path.is_dir():
+        config_fpath: Path = source_path / "config.json"
+        if config_fpath.exists():
+            return config_fpath
+
+    # Для удаленного HF repo_id используем локальный файл из кэша huggingface_hub.
+    try:
+        from huggingface_hub import hf_hub_download
+
+        cached_config_fpath: str = hf_hub_download(
+            repo_id=model_source,
+            filename="config.json",
+            repo_type="model",
+        )
+        cached_path: Path = Path(cached_config_fpath)
+        if cached_path.exists():
+            return cached_path
+    except Exception as error:
+        logger.warning(f"Не удалось получить config.json из HF Hub для {model_source}: {error}")
+
+    return None
+
+
+def _coerce_field_to_float_if_needed(payload: Any, field_name: str) -> bool:
+    """Рекурсивно приводит найденные int-значения заданного поля к float."""
+    changed: bool = False
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == field_name and isinstance(value, int) and not isinstance(value, bool):
+                payload[key] = float(value)
+                changed = True
+            else:
+                changed = _coerce_field_to_float_if_needed(value, field_name) or changed
+    elif isinstance(payload, list):
+        for item in payload:
+            changed = _coerce_field_to_float_if_needed(item, field_name) or changed
+    return changed
+
+
+def _try_patch_model_config_for_float_field(model_source: str, error: Exception) -> bool:
+    """Пытается исправить config.json при ошибке float/int и возвращает факт правки."""
+    error_text: str = str(error)
+    lowered: str = error_text.lower()
+    if "expected float" not in lowered or "got int" not in lowered:
+        return False
+
+    field_name: str | None = _extract_expected_float_field_name(error_text)
+    if field_name is None:
+        return False
+
+    config_fpath: Path | None = _get_local_config_json_fpath(model_source)
+    if config_fpath is None:
+        logger.warning(
+            f"Не удалось автоисправить конфиг модели {model_source}: локальный config.json не найден для поля {field_name}"
+        )
+        return False
+
+    with open(config_fpath, "r", encoding="utf-8") as file:
+        config_payload: Any = json.load(file)
+
+    if not _coerce_field_to_float_if_needed(config_payload, field_name=field_name):
+        logger.warning(f"Поле {field_name} не найдено в {config_fpath}, автоисправление не применено")
+        return False
+
+    with open(config_fpath, "w", encoding="utf-8") as file:
+        json.dump(config_payload, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+
+    logger.warning(f"Автоисправление config.json: поле {field_name} приведено к float в {config_fpath}")
+    return True
+
+
+def _load_model_with_config_autofix(
+    model_source: str,
+    *,
+    torch_dtype: torch.dtype,
+    device_map: str | None,
+    attn_implementation: str,
+) -> Any:
+    """Загружает модель и при необходимости делает один retry после автофикса config.json."""
+    model_kwargs: dict[str, Any] = {
+        "torch_dtype": torch_dtype,
+        "trust_remote_code": True,
+        "attn_implementation": attn_implementation,
+    }
+    if device_map is not None:
+        model_kwargs["device_map"] = device_map
+
+    try:
+        return AutoModelForCausalLM.from_pretrained(model_source, **model_kwargs)
+    except Exception as error:
+        if not _try_patch_model_config_for_float_field(model_source=model_source, error=error):
+            raise
+
+    # После правки config.json пробуем загрузить еще раз.
+    return AutoModelForCausalLM.from_pretrained(model_source, **model_kwargs)
+
+
 def _build_model_and_tokenizer(model_name: str) -> tuple[Any, Any, torch.device]:
     """Загружает модель и токенизатор с учетом multi-GPU конфигурации."""
     if torch.cuda.is_available():
@@ -473,25 +588,26 @@ def _build_model_and_tokenizer(model_name: str) -> tuple[Any, Any, torch.device]
         compute_dtype: torch.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         logger.info(f"Доступно GPU: {gpu_count}, включаю device_map=auto и dtype={compute_dtype}")
 
-        model = AutoModelForCausalLM.from_pretrained(
-            _resolve_model_source(model_name),
+        model_source: str = _resolve_model_source(model_name)
+        model = _load_model_with_config_autofix(
+            model_source=model_source,
             torch_dtype=compute_dtype,
             device_map="auto",
-            trust_remote_code=True,
-            attn_implementation="eager"
+            attn_implementation="eager",
         )
-        tokenizer = AutoTokenizer.from_pretrained(_resolve_model_source(model_name), trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
         model.eval()
         return model, _prepare_tokenizer(tokenizer), torch.device("cuda:0")
 
     logger.info("GPU не обнаружены, запускаю на CPU")
-    model = AutoModelForCausalLM.from_pretrained(
-        _resolve_model_source(model_name),
+    model_source = _resolve_model_source(model_name)
+    model = _load_model_with_config_autofix(
+        model_source=model_source,
         torch_dtype=torch.float32,
-        trust_remote_code=True,
+        device_map=None,
         attn_implementation="eager",
     )
-    tokenizer = AutoTokenizer.from_pretrained(_resolve_model_source(model_name), trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
     model.eval()
     return model, _prepare_tokenizer(tokenizer), torch.device("cpu")
 
