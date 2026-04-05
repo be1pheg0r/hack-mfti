@@ -2,10 +2,12 @@ from __future__ import annotations
 from typing import *
 
 import random
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from common.paths import get_sber_configs_dpath
 from src.sber.utils.extract_features_cli import (
     ScriptConfig,
     _build_feature_column_names,
@@ -57,6 +59,12 @@ def test_script_config_accepts_none_n_and_rejects_non_positive_n(tmp_path: Any) 
 
     with pytest.raises(ValidationError, match="n должен быть положительным"):
         ScriptConfig(n=0, output_csv=tmp_path / "features.csv")
+
+
+def test_script_config_uses_yaml_datasets_config_by_default() -> None:
+    config: ScriptConfig = ScriptConfig(n=None)
+    assert Path(config.datasets_config_path).name == "datasets_configs.yaml"
+    assert Path(config.datasets_config_path) == Path(get_sber_configs_dpath()) / "datasets_configs.yaml"
 
 
 def test_balanced_sampling_takes_equal_count_from_each_dataset_and_shuffles() -> None:

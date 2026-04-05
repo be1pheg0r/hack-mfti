@@ -13,7 +13,7 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from common.logger import SBER_HOOKS_LOGGER as logger
-from common.paths import PathLike, get_data_raw_dpath, get_model_dpath
+from common.paths import PathLike, get_data_raw_dpath, get_model_dpath, get_sber_configs_dpath
 from src.sber.constants import (
     DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
     DEFAULT_HALLUCINATION_SCORE_THRESHOLD,
@@ -65,7 +65,7 @@ class ScriptConfig(BaseModel):
     temperature_max: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX
     output_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME)
     force_download: bool = False
-    datasets_config_path: PathLike | None = None
+    datasets_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "datasets_configs.yaml")
     feature_config_path: PathLike | None = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
 
     @field_validator("batch_size", "max_new_tokens")
@@ -164,7 +164,12 @@ def parse_args() -> ScriptConfig:
         help="Путь до итогового CSV",
     )
     parser.add_argument("--force-download", action="store_true", help="Принудительно перекачать датасеты")
-    parser.add_argument("--datasets-config-path", type=str, default=None, help="Путь до YAML конфига datasets")
+    parser.add_argument(
+        "--datasets-config-path",
+        type=str,
+        default=str(Path(get_sber_configs_dpath()) / "datasets_configs.yaml"),
+        help="Путь до YAML конфига datasets",
+    )
     parser.add_argument(
         "--feature-config-path",
         type=str,
@@ -441,11 +446,7 @@ def run(config: ScriptConfig) -> Path:
     Returns:
         Путь до сохраненного CSV файла.
     """
-    datasets_config: SberDatasetsConfig
-    if config.datasets_config_path is None:
-        datasets_config = SberDatasetsConfig()
-    else:
-        datasets_config = SberDatasetsConfig.from_yaml(config.datasets_config_path)
+    datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
 
     datasets_map: dict[str, Any] = retrieve_all_datasets(
         config=datasets_config,
