@@ -173,6 +173,7 @@ def download_rubq_archive(
     """Скачивает архив RuBQ: сначала Kaggle API, при ошибке fallback на curl."""
     try:
         logger.info("Пробую скачать RuBQ через Kaggle Python API")
+        assert False # не сегодня
         return download_rubq_archive_with_kaggle_api(
             config=config,
             target_dir=target_dir,
