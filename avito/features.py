@@ -8,11 +8,13 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, field_validator
 from rapidfuzz import fuzz, process
 
-from avito.constants import COMPLEX_MARKERS, SPLIT_MARKERS, TURNKEY_SOURCE_TITLE
-
-
-_BULLET_PATTERN = re.compile(r"(^|\n)\s*(?:[-*•]|\d+[.)])\s+\S", flags=re.MULTILINE)
-_SENTENCE_SPLIT_PATTERN = re.compile(r"[.!?]+")
+from avito.constants import (
+    COMPLEX_MARKERS, 
+    SPLIT_MARKERS, 
+    TURNKEY_SOURCE_TITLE, 
+    _BULLET_PATTERN, 
+    _SENTENCE_SPLIT_PATTERN,    
+)
 
 
 class TextEncoderLike(Protocol):

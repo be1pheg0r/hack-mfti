@@ -10,6 +10,12 @@ from avito.microcategories.inference import (
     predict_microcategories,
     predict_microcategories_from_artifact,
 )
+from avito.microcategories.mistral_inference import (
+    build_mc_id_title_mapping,
+    build_mistral_messages,
+    parse_mistral_detected_ids,
+    predict_detected_mc_ids_with_mistral,
+)
 
 __all__ = [
     "MicrocategoryTrainingConfig",
@@ -20,4 +26,8 @@ __all__ = [
     "load_microcategory_artifact",
     "predict_microcategories",
     "predict_microcategories_from_artifact",
+    "build_mc_id_title_mapping",
+    "build_mistral_messages",
+    "parse_mistral_detected_ids",
+    "predict_detected_mc_ids_with_mistral",
 ]

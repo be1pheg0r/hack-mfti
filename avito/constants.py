@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Final
 
 
@@ -32,4 +33,9 @@ MANDATORY_CATEGORICAL_FEATURES: Final[tuple[str, ...]] = (
 	"is_turnkey",
 )
 
+_BULLET_PATTERN: Final[re.Pattern] = re.compile(
+    r"(^|\n)\s*(?:[-*•]|\d+[.)])\s+\S", 
+    flags=re.MULTILINE
+)
 
+_SENTENCE_SPLIT_PATTERN: Final[re.Pattern] = re.compile(r"[.!?]+")

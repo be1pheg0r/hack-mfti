@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 import optuna
 import numpy as np
@@ -51,6 +52,17 @@ class MicrocategoryTrainingConfig(BaseModel):
     optuna_n_trials: int = 15
     optuna_timeout_sec: int | None = None
     categorical_features: list[str] = Field(default_factory=lambda: ["source_mc_id", "case_type"])
+    backend_type: Literal["sklearn", "transformer"] = "sklearn"
+    transformer_model_name: str = "jhu-clsp/mmBERT-base"
+    transformer_max_length: int = 256
+    transformer_batch_size: int = 8
+    transformer_eval_batch_size: int = 16
+    transformer_num_epochs: int = 2
+    transformer_learning_rate: float = 2e-5
+    transformer_weight_decay: float = 0.01
+    transformer_warmup_ratio: float = 0.1
+    transformer_gradient_accumulation_steps: int = 1
+    transformer_device: str | None = None
 
     @field_validator("threshold_grid")
     @classmethod
@@ -92,12 +104,17 @@ class TrainedMicrocategoryModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())
 
     model_name: str
-    pipeline: Pipeline
+    pipeline: Pipeline | None = None
     threshold: float
     mlb_classes: list[int]
     metrics: dict[str, float]
     model_comparison_records: list[dict[str, float | str]] = Field(default_factory=list)
     tuned_params: dict[str, Any] = Field(default_factory=dict)
+    backend_type: Literal["sklearn", "transformer"] = "sklearn"
+    transformer_model_name: str | None = None
+    transformer_model_dir: str | None = None
+    transformer_model: Any | None = None
+    transformer_tokenizer: Any | None = None
 
 
 class TuneParamConfig(BaseModel):
@@ -343,6 +360,169 @@ def _evaluate_thresholds(
     return best_threshold, best_metrics
 
 
+def _resolve_transformer_thresholds(threshold_grid: Iterable[float]) -> list[float]:
+    resolved = [float(value) for value in threshold_grid]
+    if not resolved:
+        return [0.1, 0.2, 0.3, 0.4, 0.5]
+    if len(resolved) == 1 and np.isclose(resolved[0], 0.5):
+        # Для multi-label transformer один порог 0.5 часто дает пустые предсказания.
+        return [0.1, 0.2, 0.3, 0.4, 0.5]
+    return resolved
+
+
+def _sigmoid(logits: np.ndarray) -> np.ndarray:
+    clipped = np.clip(logits, -60.0, 60.0)
+    return 1.0 / (1.0 + np.exp(-clipped))
+
+
+def _train_transformer_backend(
+    df: pd.DataFrame,
+    y: np.ndarray,
+    split: pd.Series,
+    cfg: MicrocategoryTrainingConfig,
+) -> tuple[Any, Any, np.ndarray, np.ndarray]:
+    try:
+        import torch
+        from torch.utils.data import Dataset
+        from transformers import (
+            AutoModelForSequenceClassification,
+            AutoTokenizer,
+            Trainer,
+            TrainingArguments,
+            set_seed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Для transformer backend требуются torch и transformers. "
+            "Установите зависимости из requirements-avito.txt"
+        ) from exc
+
+    class _TextMultilabelDataset(Dataset):
+        def __init__(self, texts: list[str], labels: np.ndarray, tokenizer: Any, max_length: int) -> None:
+            self.texts = texts
+            self.labels = labels.astype(np.float32)
+            self.tokenizer = tokenizer
+            self.max_length = max_length
+
+        def __len__(self) -> int:
+            return len(self.texts)
+
+        def __getitem__(self, idx: int) -> dict[str, Any]:
+            encoded = self.tokenizer(
+                self.texts[idx],
+                truncation=True,
+                max_length=self.max_length,
+                padding="max_length",
+                return_tensors="pt",
+            )
+            item = {k: v.squeeze(0) for k, v in encoded.items()}
+            item["labels"] = torch.tensor(self.labels[idx], dtype=torch.float32)
+            return item
+
+    set_seed(cfg.random_state)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.transformer_model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        cfg.transformer_model_name,
+        num_labels=int(y.shape[1]),
+        problem_type="multi_label_classification",
+    )
+
+    device = cfg.transformer_device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    train_mask = split.eq("train")
+    test_mask = split.eq("test")
+    val_mask = split.eq("val")
+    fit_mask = (train_mask | test_mask) if cfg.merge_train_test_for_fit else train_mask
+    if not fit_mask.any() or not val_mask.any():
+        raise ValueError("Ожидаются непустые группы split для transformer backend: fit/val")
+
+    fit_texts = df.loc[fit_mask, "description"].astype(str).tolist()
+    val_texts = df.loc[val_mask, "description"].astype(str).tolist()
+    y_fit = y[fit_mask]
+    y_val = y[val_mask]
+
+    train_dataset = _TextMultilabelDataset(
+        texts=fit_texts,
+        labels=y_fit,
+        tokenizer=tokenizer,
+        max_length=cfg.transformer_max_length,
+    )
+    eval_dataset = _TextMultilabelDataset(
+        texts=val_texts,
+        labels=y_val,
+        tokenizer=tokenizer,
+        max_length=cfg.transformer_max_length,
+    )
+
+    positive_counts = np.asarray(y_fit.sum(axis=0), dtype=np.float32)
+    negative_counts = np.asarray(y_fit.shape[0] - positive_counts, dtype=np.float32)
+    pos_weight_np = (negative_counts + 1.0) / (positive_counts + 1.0)
+    pos_weight_np = np.clip(pos_weight_np, 1.0, 50.0)
+    pos_weight = torch.tensor(pos_weight_np, dtype=torch.float32)
+
+    effective_batch = max(1, cfg.transformer_batch_size * cfg.transformer_gradient_accumulation_steps)
+    steps_per_epoch = max(1, int(np.ceil(len(train_dataset) / effective_batch)))
+    total_steps = max(1, int(steps_per_epoch * cfg.transformer_num_epochs))
+    warmup_steps = max(0, int(total_steps * cfg.transformer_warmup_ratio))
+
+    train_args = TrainingArguments(
+        output_dir=tempfile.mkdtemp(prefix="avito_microcats_mmbert_"),
+        learning_rate=cfg.transformer_learning_rate,
+        per_device_train_batch_size=cfg.transformer_batch_size,
+        per_device_eval_batch_size=cfg.transformer_eval_batch_size,
+        num_train_epochs=cfg.transformer_num_epochs,
+        weight_decay=cfg.transformer_weight_decay,
+        warmup_steps=warmup_steps,
+        gradient_accumulation_steps=cfg.transformer_gradient_accumulation_steps,
+        eval_strategy="no",
+        save_strategy="no",
+        logging_strategy="steps",
+        logging_steps=50,
+        report_to=[],
+        seed=cfg.random_state,
+        dataloader_pin_memory=torch.cuda.is_available(),
+    )
+
+    class _WeightedMultilabelTrainer(Trainer):
+        def __init__(self, *args: Any, pos_weight_tensor: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._pos_weight_tensor = pos_weight_tensor
+
+        def compute_loss(
+            self,
+            model: Any,
+            inputs: dict[str, Any],
+            return_outputs: bool = False,
+            **kwargs: Any,
+        ) -> Any:
+            labels = inputs.get("labels")
+            model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+            outputs = model(**model_inputs)
+            logits = outputs.logits
+            if labels is None:
+                loss = outputs.loss
+            else:
+                loss_fct = torch.nn.BCEWithLogitsLoss(
+                    pos_weight=self._pos_weight_tensor.to(logits.device)
+                )
+                loss = loss_fct(logits, labels.to(logits.device).float())
+            return (loss, outputs) if return_outputs else loss
+
+    trainer = _WeightedMultilabelTrainer(
+        model=model,
+        args=train_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        pos_weight_tensor=pos_weight,
+    )
+
+    trainer.train()
+    predictions = trainer.predict(eval_dataset).predictions
+    val_proba = _sigmoid(np.asarray(predictions, dtype=np.float64))
+    return model, tokenizer, val_proba, y_val
+
+
 def _make_estimator(
     architecture_name: str,
     *,
@@ -435,6 +615,64 @@ def train_microcategory_model(
     if missing:
         raise ValueError(f"В DataFrame отсутствуют обязательные колонки: {sorted(missing)}")
 
+    y, mlb = _prepare_targets(df)
+    split = df[SPLIT_COLUMN].astype(str)
+
+    if cfg.backend_type == "transformer":
+        log_block_separator(logger)
+        logger.info("Старт обучения transformer backend microcategories")
+        logger.info(f"Модель: {cfg.transformer_model_name}")
+        logger.info(f"Эпох: {cfg.transformer_num_epochs}")
+        logger.info(f"Batch train/eval: {cfg.transformer_batch_size}/{cfg.transformer_eval_batch_size}")
+        log_block_separator(logger)
+
+        model, tokenizer, val_proba, y_val = _train_transformer_backend(
+            df=df,
+            y=y,
+            split=split,
+            cfg=cfg,
+        )
+        threshold_grid = _resolve_transformer_thresholds(cfg.threshold_grid)
+        if threshold_grid != cfg.threshold_grid:
+            logger.info(f"Transformer threshold grid переопределен: {threshold_grid}")
+        best_threshold, best_metrics = _evaluate_thresholds(
+            y_true=y_val,
+            proba=val_proba,
+            thresholds=threshold_grid,
+        )
+
+        comparison_records: list[dict[str, float | str]] = [
+            {
+                "model": "transformer_mmbert",
+                "micro_f1": float(best_metrics["micro_f1"]),
+                "micro_precision": float(best_metrics["micro_precision"]),
+                "micro_recall": float(best_metrics["micro_recall"]),
+                "threshold": float(best_threshold),
+            }
+        ]
+
+        logger.info("Результаты transformer backend на валидации:")
+        logger.info(f"  micro_f1        = {best_metrics['micro_f1']:.6f}")
+        logger.info(f"  micro_precision = {best_metrics['micro_precision']:.6f}")
+        logger.info(f"  micro_recall    = {best_metrics['micro_recall']:.6f}")
+        logger.info(f"  threshold       = {best_threshold:.3f}")
+        log_block_separator(logger)
+
+        return TrainedMicrocategoryModel(
+            model_name="transformer_mmbert",
+            pipeline=None,
+            threshold=best_threshold,
+            mlb_classes=[int(cls) for cls in mlb.classes_.tolist()],
+            metrics=best_metrics,
+            model_comparison_records=comparison_records,
+            tuned_params={},
+            backend_type="transformer",
+            transformer_model_name=cfg.transformer_model_name,
+            transformer_model_dir=None,
+            transformer_model=model,
+            transformer_tokenizer=tokenizer,
+        )
+
     keyphrases = resolve_keyphrases(df, feat_cfg)
     features = extract_should_split_features(df=df, config=feat_cfg, keyphrases=keyphrases)
     if include_embeddings:
@@ -447,9 +685,6 @@ def train_microcategory_model(
             keyphrases=keyphrases,
             config=feat_cfg,
         )
-
-    y, mlb = _prepare_targets(df)
-    split = df[SPLIT_COLUMN].astype(str)
 
     X_fit, y_fit, X_val, y_val = _split_frame(
         X=features,
@@ -633,4 +868,9 @@ def train_microcategory_model(
         metrics=final_metrics,
         model_comparison_records=comparison_records,
         tuned_params=tuned_params,
+        backend_type="sklearn",
+        transformer_model_name=None,
+        transformer_model_dir=None,
+        transformer_model=None,
+        transformer_tokenizer=None,
     )

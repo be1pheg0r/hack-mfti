@@ -82,18 +82,75 @@ class ShouldSplitCaseConfig(BaseModel):
     cli_defaults: ShouldSplitCliDefaultsConfig = Field(default_factory=ShouldSplitCliDefaultsConfig)
 
 
+class MicrocategoriesMistralInferenceConfig(BaseModel):
+    """Конфигурация Mistral-бэкенда для инференса микрокатегорий."""
+
+    enabled: bool = False
+    models_list: list[str] = Field(default_factory=lambda: ["mistral-small-latest"])
+    timeout: int = 120
+    max_attempts_per_call: int = 2
+    temperature: float = 0.0
+    top_p: float = 1.0
+
+    @field_validator("models_list")
+    @classmethod
+    def validate_models_list(cls, value: list[str]) -> list[str]:
+        normalized = [model.strip() for model in value if model.strip()]
+        if not normalized:
+            raise ValueError("models_list не может быть пустым")
+        return normalized
+
+    @field_validator("timeout")
+    @classmethod
+    def validate_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("timeout должен быть положительным")
+        return value
+
+    @field_validator("max_attempts_per_call")
+    @classmethod
+    def validate_max_attempts(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("max_attempts_per_call должен быть положительным")
+        return value
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, value: float) -> float:
+        if value < 0.0:
+            raise ValueError("temperature должна быть неотрицательной")
+        return float(value)
+
+    @field_validator("top_p")
+    @classmethod
+    def validate_top_p(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("top_p должен быть в диапазоне (0, 1]")
+        return float(value)
+
+
+class MicrocategoriesCaseConfig(BaseModel):
+    """Корневой конфиг-блок для подсистемы микрокатегорий."""
+
+    mistral_inference: MicrocategoriesMistralInferenceConfig = Field(
+        default_factory=MicrocategoriesMistralInferenceConfig
+    )
+
+
 class AvitoCaseConfig(BaseModel):
     """Верхнеуровневая конфигурация кейса Avito.
 
     Attributes:
         config_path: Опциональный путь к YAML-конфигу.
         should_split: Конфиг подсистемы shouldSplit.
+        microcategories: Конфиг подсистемы микрокатегорий.
     """
 
     model_config = ConfigDict(frozen=True)
 
     config_path: str | Path | None = Field(default=None, exclude=True)
     should_split: ShouldSplitCaseConfig = Field(default_factory=ShouldSplitCaseConfig)
+    microcategories: MicrocategoriesCaseConfig = Field(default_factory=MicrocategoriesCaseConfig)
 
     @model_validator(mode="before")
     @classmethod
