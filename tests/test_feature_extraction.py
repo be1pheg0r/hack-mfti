@@ -6,7 +6,14 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from scripts.extract_features import ScriptConfig, _sample_balanced_queries_and_answers, _sample_temperature
+from src.sber.utils.extract_features_cli import (
+    ScriptConfig,
+    _build_feature_column_names,
+    _flatten_feature_groups,
+    _sample_balanced_queries_and_answers,
+    _sample_temperature,
+)
+from src.sber.models.extract_features import FeatureGroups
 
 
 def test_sample_temperature_is_deterministic_for_fixed_seed() -> None:
@@ -106,3 +113,26 @@ def test_balanced_sampling_rejects_insufficient_dataset_size() -> None:
         _sample_balanced_queries_and_answers(datasets_map=datasets_map, n=4, seed=1)
 
 
+def test_feature_columns_are_semantic_and_order_matches_flatten() -> None:
+    features = FeatureGroups(
+        uncertainty=[0.1] * 12,
+        internal_scalars=[0.2] * 6,
+        probe_vec=[0.3] * 4,
+        attention_entropy=[0.4] * 6,
+        entropy_drops=[0.5],
+        moe_routing=[0.6] * 10,
+    )
+
+    probe_layers = [0, 2]
+    names = _build_feature_column_names(features=features, probe_layers=probe_layers)
+    flat = _flatten_feature_groups(features)
+
+    assert len(names) == len(flat)
+    assert names[0] == "feature_uncertainty_token_logprob_mean"
+    assert "feature_internal_pre_answer_norm_layer_0" in names
+    assert "feature_probe_vec_0" in names
+    assert "feature_attention_entropy_mean_layer_2" in names
+    assert "feature_entropy_drop_layer_0_to_2" in names
+    assert "feature_moe_active_ratio_std" in names
+    assert all(name.startswith("feature_") for name in names)
+    assert all(not name.startswith("feature_") or name != f"feature_{idx}" for idx, name in enumerate(names))

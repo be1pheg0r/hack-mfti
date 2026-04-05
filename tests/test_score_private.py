@@ -6,7 +6,7 @@ from typing import *
 import pandas as pd
 import pytest
 
-from scripts.evaluate import _resolve_threshold, score_dataframe
+from src.sber.utils.evaluate_cli import _resolve_threshold, score_dataframe
 from src.sber.utils.evaluate_utils import evaluate_scoring_results
 
 
@@ -23,7 +23,7 @@ def test_score_dataframe_adds_prediction_and_timing_columns(monkeypatch: Any) ->
             assert len(premises) == len(hypotheses)
             return [0 for _ in premises]
 
-    monkeypatch.setattr("scripts.evaluate.HFNLIClf", DummyClf)
+    monkeypatch.setattr("src.sber.utils.evaluate_cli.HFNLIClf", DummyClf)
 
     dataframe = pd.DataFrame(
         {
@@ -104,5 +104,4 @@ def test_threshold_search_grid_updates_predictions_for_recall_priority() -> None
 
     assert threshold <= 0.49
     assert dataframe["pred_is_hallucination"].tolist() == [1, 0, 1, 0]
-
 

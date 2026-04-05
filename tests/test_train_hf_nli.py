@@ -3,13 +3,13 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from scripts.train_hf_nli import (
+from src.sber.utils.train_hf_nli_cli import (
     apply_hallucination_threshold,
     build_balanced_train_df,
     calculate_warmup_steps,
     is_candidate_better,
-    resolve_question_column,
     resolve_hallucination_threshold,
+    resolve_question_column,
     select_class_weight_dataframe,
 )
 
@@ -148,5 +148,4 @@ def test_resolve_question_column_raises_without_question_column() -> None:
 
     with pytest.raises(ValueError, match="Колонка вопроса не найдена"):
         resolve_question_column(dataframe)
-
 

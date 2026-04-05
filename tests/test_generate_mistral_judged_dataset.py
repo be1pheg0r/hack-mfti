@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.generate_mistral_judged_dataset import merge_with_existing, normalize_judge_score
+from src.sber.utils.generate_mistral_judged_dataset_cli import merge_with_existing, normalize_judge_score
 
 
 def test_normalize_judge_score_json_and_plain_text() -> None:
@@ -41,4 +41,3 @@ def test_merge_with_existing_prefills_processed_rows(tmp_path: Path) -> None:
     assert str(second["model_answer"]) == "m2"
     assert str(second["judge_score"]) == "галлюцинация"
     assert int(second["is_hallucination"]) == 1
-
