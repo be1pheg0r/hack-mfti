@@ -51,6 +51,14 @@ def test_script_config_rejects_temperature_bounds_in_wrong_order(tmp_path: Any) 
         )
 
 
+def test_script_config_accepts_none_n_and_rejects_non_positive_n(tmp_path: Any) -> None:
+    config: ScriptConfig = ScriptConfig(n=None, output_csv=tmp_path / "features.csv")
+    assert config.n is None
+
+    with pytest.raises(ValidationError, match="n должен быть положительным"):
+        ScriptConfig(n=0, output_csv=tmp_path / "features.csv")
+
+
 def test_balanced_sampling_takes_equal_count_from_each_dataset_and_shuffles() -> None:
     datasets_map: dict[str, list[dict[str, Any]]] = {
         "rubq-20": [
@@ -86,6 +94,30 @@ def test_balanced_sampling_takes_equal_count_from_each_dataset_and_shuffles() ->
         ["rubq_a1", "rubq_a2", "chegeka_a1", "chegeka_a2"],
         ["chegeka_a1", "chegeka_a2", "rubq_a1", "rubq_a2"],
     ]
+
+
+def test_sampling_with_none_n_takes_all_samples_from_all_datasets() -> None:
+    datasets_map: dict[str, list[dict[str, Any]]] = {
+        "rubq-20": [
+            {"question_text": "rq1", "answer_text": "rubq_a1"},
+            {"question_text": "rq2", "answer_text": "rubq_a2"},
+        ],
+        "tape-chegeka.raw": [
+            {"question": "cq1", "answer": "chegeka_a1"},
+            {"question": "cq2", "answer": "chegeka_a2"},
+            {"question": "cq3", "answer": "chegeka_a3"},
+        ],
+    }
+
+    sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
+        datasets_map=datasets_map,
+        n=None,
+        seed=11,
+    )
+
+    assert len(sampled_queries) == 5
+    assert len(sampled_answers) == 5
+    assert sorted(sampled_answers) == ["chegeka_a1", "chegeka_a2", "chegeka_a3", "rubq_a1", "rubq_a2"]
 
 
 def test_balanced_sampling_rejects_n_not_divisible_by_dataset_count() -> None:

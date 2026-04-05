@@ -37,6 +37,7 @@ class ScriptConfig(BaseModel):
 
     Attributes:
         n: Количество сэмплов для обработки после перемешивания.
+            Если не задано, обрабатываются все сэмплы из всех датасетов.
         seed: Seed для воспроизводимого перемешивания.
         model_name: Hugging Face имя модели.
         batch_size: Размер батча для генерации.
@@ -53,7 +54,7 @@ class ScriptConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    n: int
+    n: int | None = None
     seed: int = DEFAULT_SBER_SCRIPT_SEED
     model_name: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
     batch_size: int = DEFAULT_SBER_SCRIPT_BATCH_SIZE
@@ -67,12 +68,20 @@ class ScriptConfig(BaseModel):
     datasets_config_path: PathLike | None = None
     feature_config_path: PathLike | None = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
 
-    @field_validator("n", "batch_size", "max_new_tokens")
+    @field_validator("batch_size", "max_new_tokens")
     @classmethod
     def validate_positive_int(cls, value: int) -> int:
         """Проверяет, что числовые параметры положительные."""
         if value <= 0:
             raise ValueError("Параметр должен быть положительным")
+        return value
+
+    @field_validator("n")
+    @classmethod
+    def validate_n(cls, value: int | None) -> int | None:
+        """Проверяет, что n положительный, если параметр задан."""
+        if value is not None and value <= 0:
+            raise ValueError("Параметр n должен быть положительным")
         return value
 
     @field_validator("model_name")
@@ -114,7 +123,12 @@ class ScriptConfig(BaseModel):
 def parse_args() -> ScriptConfig:
     """Парсит CLI-аргументы и возвращает валидированную конфигурацию."""
     parser = argparse.ArgumentParser(description="Извлечение фичей из LLM для Sber кейса")
-    parser.add_argument("--n", type=int, required=True, help="Обязательное число обрабатываемых сэмплов")
+    parser.add_argument(
+        "--n",
+        type=int,
+        default=None,
+        help="Число обрабатываемых сэмплов; если не указано, будут обработаны все сэмплы",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SBER_SCRIPT_SEED, help="Seed для shuffle")
     parser.add_argument("--model-name", type=str, default=DEFAULT_SBER_SCRIPT_MODEL_NAME, help="Имя модели на Hugging Face")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_SBER_SCRIPT_BATCH_SIZE, help="Размер батча для генерации")
@@ -203,34 +217,41 @@ def _sample_queries_and_answers(
 
 def _sample_balanced_queries_and_answers(
     datasets_map: dict[str, Iterable[dict[str, Any]]],
-    n: int,
+    n: int | None,
     seed: int,
 ) -> tuple[list[str], list[str]]:
-    """Равномерно берет сэмплы из каждого датасета и перемешивает общий пул."""
+    """Выбирает сэмплы из датасетов и перемешивает общий пул.
+
+    Если `n` указан, делает balanced sampling: одинаковое число из каждого датасета.
+    Если `n` не указан, берет все сэмплы из всех датасетов.
+    """
     dataset_count: int = len(datasets_map)
     if dataset_count == 0:
         raise ValueError("datasets_map не должен быть пустым")
-    if n % dataset_count != 0:
+    if n is not None and n % dataset_count != 0:
         raise ValueError(
             f"Параметр n={n} должен делиться на число датасетов ({dataset_count}) для равномерной выборки"
         )
 
-    per_dataset: int = n // dataset_count
     rng: random.Random = random.Random(seed)
     sampled_pairs: list[tuple[str, str]] = []
+    per_dataset: int | None = None if n is None else n // dataset_count
 
     for dataset_name, dataset in datasets_map.items():
         queries, answers = unpack_dataset(dataset=dataset, name=dataset_name)
         if len(queries) != len(answers):
             raise ValueError(f"Датасет {dataset_name}: queries и answers должны быть одной длины")
-        if len(queries) < per_dataset:
+        if per_dataset is not None and len(queries) < per_dataset:
             raise ValueError(
                 f"Датасет {dataset_name} содержит недостаточно сэмплов: {len(queries)} < {per_dataset}"
             )
 
         pairs: list[tuple[str, str]] = list(zip(queries, answers))
         rng.shuffle(pairs)
-        sampled_pairs.extend(pairs[:per_dataset])
+        if per_dataset is None:
+            sampled_pairs.extend(pairs)
+        else:
+            sampled_pairs.extend(pairs[:per_dataset])
 
     rng.shuffle(sampled_pairs)
     sampled_queries: list[str] = [query for query, _ in sampled_pairs]
@@ -435,11 +456,16 @@ def run(config: ScriptConfig) -> Path:
         n=config.n,
         seed=config.seed,
     )
-    per_dataset: int = config.n // len(datasets_map)
-    logger.info(
-        f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
-        f"({per_dataset} из каждого датасета)"
-    )
+    if config.n is None:
+        logger.info(
+            f"Параметр n не задан: после shuffle выбраны все сэмплы из датасетов (всего {len(sampled_queries)})"
+        )
+    else:
+        per_dataset: int = config.n // len(datasets_map)
+        logger.info(
+            f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
+            f"({per_dataset} из каждого датасета)"
+        )
 
     model, tokenizer, input_device = _build_model_and_tokenizer(config.model_name)
     feature_config: FeatureExtractorConfig
