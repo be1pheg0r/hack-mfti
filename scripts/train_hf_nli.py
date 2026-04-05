@@ -191,7 +191,7 @@ class TrainHFNLIConfig(BaseModel):
 
 
 class HallucinationDataset(Dataset[Any]):
-    """Dataset с парами correct_answer/model_answer и бинарной меткой."""
+    """Dataset с парами question/model_answer и бинарной меткой."""
 
     def __init__(
         self,
@@ -201,7 +201,6 @@ class HallucinationDataset(Dataset[Any]):
         max_length: int,
         *,
         question_col: str,
-        premise_col: str = "correct_answer",
         hypothesis_col: str = "model_answer",
         label_col: str = "is_hallucination",
     ) -> None:
@@ -210,7 +209,6 @@ class HallucinationDataset(Dataset[Any]):
         self.feature_extractor: QAFeatureExtractor = feature_extractor
         self.max_length: int = max_length
         self.question_col: str = question_col
-        self.premise_col: str = premise_col
         self.hypothesis_col: str = hypothesis_col
         self.label_col: str = label_col
 
@@ -220,7 +218,7 @@ class HallucinationDataset(Dataset[Any]):
     def __getitem__(self, index: int) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         row = self.dataframe.iloc[index]
         encoded = self.tokenizer(
-            str(row[self.premise_col]),
+            str(row[self.question_col]),
             str(row[self.hypothesis_col]),
             truncation=True,
             max_length=self.max_length,
@@ -350,7 +348,7 @@ def set_seed(seed: int) -> None:
 
 def _load_and_prepare_dataframe(csv_fpath: PathLike) -> pd.DataFrame:
     dataframe: pd.DataFrame = pd.read_csv(csv_fpath)
-    required_columns: list[str] = ["correct_answer", "model_answer", "is_hallucination"]
+    required_columns: list[str] = ["model_answer", "is_hallucination"]
     cleaned: pd.DataFrame = dataframe.dropna(subset=required_columns).reset_index(drop=True)
     cleaned["is_hallucination"] = cleaned["is_hallucination"].astype(int)
     return cleaned
@@ -374,8 +372,9 @@ def resolve_question_column(dataframe: pd.DataFrame, configured_question_col: st
         if candidate in dataframe.columns:
             return candidate
 
-    logger.warning("Колонка вопроса не найдена, использую correct_answer как fallback")
-    return "correct_answer"
+    raise ValueError(
+        "Колонка вопроса не найдена. Укажите question_col или добавьте одну из колонок: query, question, prompt, user_query"
+    )
 
 
 def build_balanced_train_df(train_df: pd.DataFrame, seed: int) -> pd.DataFrame:
@@ -691,8 +690,8 @@ def score_with_trained_model(
     autocast_dtype: torch.dtype,
 ) -> tuple[pd.DataFrame, int]:
     """Скорит DataFrame напрямую обученной моделью в формате evaluate-пайплайна."""
-    if "correct_answer" not in dataframe.columns or "model_answer" not in dataframe.columns:
-        raise ValueError("Ожидаются колонки correct_answer и model_answer")
+    if "model_answer" not in dataframe.columns:
+        raise ValueError("Ожидается колонка model_answer")
 
     model = artifacts.model
     tokenizer = artifacts.tokenizer
@@ -711,7 +710,7 @@ def score_with_trained_model(
     for start in range(0, len(dataframe), batch_size):
         batch = dataframe.iloc[start : start + batch_size]
         questions: list[str] = batch[question_col].astype(str).tolist()
-        premises: list[str] = batch["correct_answer"].astype(str).tolist()
+        premises: list[str] = questions
         hypotheses: list[str] = batch["model_answer"].astype(str).tolist()
 
         encoded = tokenizer(

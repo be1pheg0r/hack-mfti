@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from scripts.train_hf_nli import (
     apply_hallucination_threshold,
     build_balanced_train_df,
     calculate_warmup_steps,
     is_candidate_better,
+    resolve_question_column,
     resolve_hallucination_threshold,
     select_class_weight_dataframe,
 )
@@ -131,5 +133,20 @@ def test_select_class_weight_dataframe_can_use_raw_or_balanced() -> None:
     assert selected_without_undersampling is raw_df
     assert selected_raw is raw_df
     assert selected_balanced is balanced_df
+
+
+def test_resolve_question_column_uses_known_candidates() -> None:
+    dataframe = pd.DataFrame({"prompt": ["q1"], "model_answer": ["a1"], "is_hallucination": [0]})
+
+    resolved = resolve_question_column(dataframe)
+
+    assert resolved == "prompt"
+
+
+def test_resolve_question_column_raises_without_question_column() -> None:
+    dataframe = pd.DataFrame({"model_answer": ["a1"], "is_hallucination": [0], "correct_answer": ["gt"]})
+
+    with pytest.raises(ValueError, match="Колонка вопроса не найдена"):
+        resolve_question_column(dataframe)
 
 
