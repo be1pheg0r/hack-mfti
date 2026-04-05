@@ -420,6 +420,7 @@ def _build_model_and_tokenizer(model_name: str) -> tuple[Any, Any, torch.device]
             torch_dtype=compute_dtype,
             device_map="auto",
             trust_remote_code=True,
+            attn_implementation="eager"
         )
         tokenizer = AutoTokenizer.from_pretrained(_resolve_model_source(model_name), trust_remote_code=True)
         model.eval()
