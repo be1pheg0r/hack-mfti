@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 
 import pytest
+import pandas as pd
 from pydantic import ValidationError
 
 from common.paths import get_sber_configs_dpath
@@ -13,7 +14,9 @@ from src.sber.utils.extract_features_cli import (
     _build_feature_column_names,
     _compute_subprocess_worker_count,
     _flatten_feature_groups,
+    _resolve_query_column_name,
     _sample_balanced_queries_and_answers,
+    _sample_dataframe_rows,
     _sample_temperature,
 )
 from src.sber.models.extract_features import FeatureGroups
@@ -118,6 +121,26 @@ def test_compute_subprocess_worker_count_stays_single_for_cpu_or_disabled_mode()
 
     assert workers_cpu == 1
     assert workers_disabled == 1
+
+
+def test_resolve_query_column_name_prefers_query_then_prompt() -> None:
+    assert _resolve_query_column_name(["id", "query"]) == "query"
+    assert _resolve_query_column_name(["id", "prompt"]) == "prompt"
+
+
+def test_resolve_query_column_name_raises_when_column_missing() -> None:
+    with pytest.raises(ValueError, match="query или prompt"):
+        _resolve_query_column_name(["id", "text"])
+
+
+def test_sample_dataframe_rows_is_deterministic_for_n() -> None:
+    dataframe: pd.DataFrame = pd.DataFrame({"query": [f"q{i}" for i in range(6)]})
+
+    sampled_a: pd.DataFrame = _sample_dataframe_rows(dataframe, n=3, seed=10)
+    sampled_b: pd.DataFrame = _sample_dataframe_rows(dataframe, n=3, seed=10)
+
+    assert sampled_a["query"].tolist() == sampled_b["query"].tolist()
+    assert len(sampled_a) == 3
 
 
 def test_balanced_sampling_takes_equal_count_from_each_dataset_and_shuffles() -> None:

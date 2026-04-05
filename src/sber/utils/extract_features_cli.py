@@ -57,6 +57,8 @@ class ScriptConfig(BaseModel):
         enable_auto_subprocess: Включает авто-запуск дополнительных subprocess при свободной VRAM.
         subprocess_max_workers: Максимальное число процессов для параллельной обработки.
         subprocess_min_free_gpu_memory_mib: Минимум свободной VRAM для добавления одного процесса.
+        input_csv_path: Опциональный путь к входному CSV с колонкой `query` или `prompt`.
+        input_query_column: Явное имя колонки с текстом запроса во входном CSV.
         datasets_config_path: Опциональный путь к YAML-конфигу датасетов.
         feature_config_path: Опциональный путь к YAML-конфигу фичей.
     """
@@ -77,6 +79,8 @@ class ScriptConfig(BaseModel):
     enable_auto_subprocess: bool = DEFAULT_SBER_SCRIPT_ENABLE_AUTO_SUBPROCESS
     subprocess_max_workers: int = DEFAULT_SBER_SCRIPT_SUBPROCESS_MAX_WORKERS
     subprocess_min_free_gpu_memory_mib: int = DEFAULT_SBER_SCRIPT_SUBPROCESS_MIN_FREE_GPU_MEMORY_MIB
+    input_csv_path: PathLike | None = None
+    input_query_column: str | None = None
     datasets_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "datasets_configs.yaml")
     feature_config_path: PathLike | None = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
 
@@ -103,6 +107,17 @@ class ScriptConfig(BaseModel):
         if value is not None and value <= 0:
             raise ValueError("Параметр n должен быть положительным")
         return value
+
+    @field_validator("input_query_column")
+    @classmethod
+    def validate_input_query_column(cls, value: str | None) -> str | None:
+        """Проверяет, что имя query-колонки не пустое, если задано."""
+        if value is None:
+            return None
+        normalized: str = value.strip()
+        if not normalized:
+            raise ValueError("input_query_column не может быть пустым")
+        return normalized
 
     @field_validator("model_name")
     @classmethod
@@ -201,6 +216,18 @@ def parse_args() -> ScriptConfig:
         type=int,
         default=DEFAULT_SBER_SCRIPT_SUBPROCESS_MIN_FREE_GPU_MEMORY_MIB,
         help="Минимум свободной VRAM (MiB) для запуска дополнительного процесса",
+    )
+    parser.add_argument(
+        "--input-csv-path",
+        type=str,
+        default=None,
+        help="Путь к входному CSV. Если задан, датасеты из YAML не загружаются",
+    )
+    parser.add_argument(
+        "--input-query-column",
+        type=str,
+        default=None,
+        help="Явное имя колонки с запросом во входном CSV (иначе auto: query -> prompt)",
     )
     parser.add_argument(
         "--datasets-config-path",
@@ -504,6 +531,35 @@ def _build_shard_ranges(total: int, workers: int) -> list[tuple[int, int]]:
     return ranges
 
 
+def _resolve_query_column_name(columns: Sequence[str], preferred_column: str | None = None) -> str:
+    """Определяет колонку запроса во входном CSV."""
+    available: set[str] = {str(column) for column in columns}
+    if preferred_column is not None:
+        if preferred_column in available:
+            return preferred_column
+        raise ValueError(f"Колонка {preferred_column} не найдена во входном CSV")
+
+    for candidate in ("query", "prompt"):
+        if candidate in available:
+            return candidate
+    raise ValueError("Во входном CSV должна быть колонка query или prompt")
+
+
+def _sample_dataframe_rows(dataframe: pd.DataFrame, n: int | None, seed: int) -> pd.DataFrame:
+    """Возвращает детерминированный сэмпл строк DataFrame."""
+    total_size: int = int(len(dataframe))
+    if n is None:
+        return dataframe.reset_index(drop=True)
+    if n > total_size:
+        raise ValueError(f"Параметр n={n} больше размера входного CSV ({total_size})")
+
+    indices: list[int] = list(range(total_size))
+    rng: random.Random = random.Random(seed)
+    rng.shuffle(indices)
+    sampled_indices: list[int] = indices[:n]
+    return dataframe.iloc[sampled_indices].reset_index(drop=True)
+
+
 def _prepare_tokenizer(tokenizer: Any) -> Any:
     """Настраивает токенизатор для батчевой генерации на decoder-only моделях."""
     tokenizer.padding_side = "left"
@@ -562,7 +618,8 @@ def _extract_rows_for_samples(
     *,
     config: ScriptConfig,
     sampled_queries: list[str],
-    sampled_answers: list[str],
+    sampled_answers: list[str] | None,
+    base_rows: list[dict[str, Any]] | None,
     sample_id_offset: int,
 ) -> list[dict[str, Any]]:
     """Выполняет экстракцию фичей для заданного слайса сэмплов."""
@@ -577,6 +634,7 @@ def _extract_rows_for_samples(
     output_rows: list[dict[str, Any]] = []
     feature_columns: list[str] = []
     sample_counter: int = sample_id_offset
+    sample_index_in_slice: int = 0
     temperature_rng: random.Random = random.Random(config.seed + sample_id_offset)
 
     with torch.inference_mode():
@@ -585,7 +643,7 @@ def _extract_rows_for_samples(
             progress_bar = tqdm(total=total_batches, desc="Извлечение фичей", disable=sample_id_offset != 0)
             for batch_queries, batch_answers in _batched_pairs(
                 queries=sampled_queries,
-                answers=sampled_answers,
+                answers=sampled_answers if sampled_answers is not None else [""] * len(sampled_queries),
                 batch_size=config.batch_size,
             ):
                 batch_temperature: float = _sample_temperature(
@@ -644,22 +702,32 @@ def _extract_rows_for_samples(
                     if not feature_columns:
                         feature_columns = extracted_feature_columns
 
-                    hallucination_score: float = float(
-                        fuzz.partial_ratio(model_answer.lower(), batch_answers[index_in_batch].lower())
-                    )
-                    is_hallucination: int = int(hallucination_score < DEFAULT_HALLUCINATION_SCORE_THRESHOLD)
+                    row: dict[str, Any] = {}
+                    if base_rows is not None and sample_index_in_slice < len(base_rows):
+                        row = dict(base_rows[sample_index_in_slice])
 
-                    row: dict[str, Any] = {
-                        "sample_id": sample_counter,
-                        "query": batch_queries[index_in_batch],
-                        "correct_answer": batch_answers[index_in_batch],
-                        "model_answer": model_answer,
-                        "temperature": batch_temperature,
-                        "hallucination_score": hallucination_score,
-                        "is_hallucination": is_hallucination,
-                    }
+                    row.update(
+                        {
+                            "sample_id": sample_counter,
+                            "query": batch_queries[index_in_batch],
+                            "model_answer": model_answer,
+                            "temperature": batch_temperature,
+                        }
+                    )
+
+                    if sampled_answers is not None and sample_index_in_slice < len(sampled_answers):
+                        reference_answer: str = sampled_answers[sample_index_in_slice]
+                        row["correct_answer"] = reference_answer
+                        hallucination_score: float = float(fuzz.partial_ratio(model_answer.lower(), reference_answer.lower()))
+                        row["hallucination_score"] = hallucination_score
+                        row["is_hallucination"] = int(hallucination_score < DEFAULT_HALLUCINATION_SCORE_THRESHOLD)
+                    else:
+                        row["hallucination_score"] = None
+                        row["is_hallucination"] = None
+
                     row.update({feature_name: value for feature_name, value in zip(feature_columns, feature_vector)})
                     output_rows.append(row)
+                    sample_index_in_slice += 1
                     sample_counter += 1
 
                     del full_ids, logits, extracted_features, feature_vector
@@ -674,12 +742,24 @@ def _extract_rows_worker(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Воркeр multiprocessing для экстракции фичей на шардe."""
     config: ScriptConfig = ScriptConfig.model_validate(payload["config"])
     sampled_queries: list[str] = list(payload["queries"])
-    sampled_answers: list[str] = list(payload["answers"])
+    sampled_answers: list[str] | None
+    payload_answers: Any = payload.get("answers")
+    if payload_answers is None:
+        sampled_answers = None
+    else:
+        sampled_answers = list(payload_answers)
+    base_rows: list[dict[str, Any]] | None
+    payload_rows: Any = payload.get("base_rows")
+    if payload_rows is None:
+        base_rows = None
+    else:
+        base_rows = list(payload_rows)
     sample_id_offset: int = int(payload["sample_id_offset"])
     return _extract_rows_for_samples(
         config=config,
         sampled_queries=sampled_queries,
         sampled_answers=sampled_answers,
+        base_rows=base_rows,
         sample_id_offset=sample_id_offset,
     )
 
@@ -688,7 +768,8 @@ def _extract_rows_in_parallel(
     *,
     config: ScriptConfig,
     sampled_queries: list[str],
-    sampled_answers: list[str],
+    sampled_answers: list[str] | None,
+    base_rows: list[dict[str, Any]] | None,
     worker_count: int,
 ) -> list[dict[str, Any]]:
     """Запускает multiprocessing-экстракцию по шардированным сэмплам."""
@@ -699,7 +780,8 @@ def _extract_rows_in_parallel(
             {
                 "config": config.model_dump(),
                 "queries": sampled_queries[start:stop],
-                "answers": sampled_answers[start:stop],
+                "answers": None if sampled_answers is None else sampled_answers[start:stop],
+                "base_rows": None if base_rows is None else base_rows[start:stop],
                 "sample_id_offset": start,
             }
         )
@@ -723,27 +805,59 @@ def run(config: ScriptConfig) -> Path:
     Returns:
         Путь до сохраненного CSV файла.
     """
-    datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
+    sampled_queries: list[str]
+    sampled_answers: list[str] | None
+    base_rows: list[dict[str, Any]] | None
 
-    datasets_map: dict[str, Any] = retrieve_all_datasets(
-        config=datasets_config,
-        force_download=config.force_download,
-    )
-    sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
-        datasets_map=datasets_map,
-        n=config.n,
-        seed=config.seed,
-    )
-    if config.n is None:
+    if config.input_csv_path is not None:
+        input_path: Path = Path(config.input_csv_path)
+        input_dataframe: pd.DataFrame = pd.read_csv(input_path)
+        sampled_dataframe: pd.DataFrame = _sample_dataframe_rows(input_dataframe, n=config.n, seed=config.seed)
+        query_column: str = _resolve_query_column_name(
+            columns=[str(column) for column in sampled_dataframe.columns],
+            preferred_column=config.input_query_column,
+        )
+        normalized_queries: list[str] = sampled_dataframe[query_column].astype("string").fillna("").str.strip().tolist()
+        if any(not query for query in normalized_queries):
+            raise ValueError(f"Во входном CSV найдены пустые значения в колонке {query_column}")
+
+        sampled_queries = [str(query) for query in normalized_queries]
+        sampled_answers = None
+        if "correct_answer" in sampled_dataframe.columns:
+            answers_series = sampled_dataframe["correct_answer"].astype("string").fillna("").str.strip()
+            if answers_series.str.len().gt(0).all():
+                sampled_answers = [str(answer) for answer in answers_series.tolist()]
+
+        base_rows = sampled_dataframe.to_dict(orient="records")
         logger.info(
-            f"Параметр n не задан: после shuffle выбраны все сэмплы из датасетов (всего {len(sampled_queries)})"
+            f"Использую входной CSV {input_path}. Выбрано {len(sampled_queries)} строк, query-колонка: {query_column}"
         )
     else:
-        per_dataset: int = config.n // len(datasets_map)
-        logger.info(
-            f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
-            f"({per_dataset} из каждого датасета)"
+        datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
+        datasets_map: dict[str, Any] = retrieve_all_datasets(
+            config=datasets_config,
+            force_download=config.force_download,
         )
+        sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
+            datasets_map=datasets_map,
+            n=config.n,
+            seed=config.seed,
+        )
+        base_rows = [
+            {"query": query, "correct_answer": answer}
+            for query, answer in zip(sampled_queries, sampled_answers)
+        ]
+
+        if config.n is None:
+            logger.info(
+                f"Параметр n не задан: после shuffle выбраны все сэмплы из датасетов (всего {len(sampled_queries)})"
+            )
+        else:
+            per_dataset: int = config.n // len(datasets_map)
+            logger.info(
+                f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
+                f"({per_dataset} из каждого датасета)"
+            )
 
     worker_count: int = _resolve_subprocess_worker_count(config=config, total_samples=len(sampled_queries))
     output_rows: list[dict[str, Any]]
@@ -752,6 +866,7 @@ def run(config: ScriptConfig) -> Path:
             config=config,
             sampled_queries=sampled_queries,
             sampled_answers=sampled_answers,
+            base_rows=base_rows,
             sample_id_offset=0,
         )
     else:
@@ -761,6 +876,7 @@ def run(config: ScriptConfig) -> Path:
                 config=config,
                 sampled_queries=sampled_queries,
                 sampled_answers=sampled_answers,
+                base_rows=base_rows,
                 worker_count=worker_count,
             )
         except Exception as error:
@@ -769,6 +885,7 @@ def run(config: ScriptConfig) -> Path:
                 config=config,
                 sampled_queries=sampled_queries,
                 sampled_answers=sampled_answers,
+                base_rows=base_rows,
                 sample_id_offset=0,
             )
 
