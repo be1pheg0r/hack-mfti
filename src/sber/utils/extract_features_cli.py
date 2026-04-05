@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import random
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 from pathlib import Path
 from typing import *
 
@@ -17,7 +20,10 @@ from common.paths import PathLike, get_data_raw_dpath, get_model_dpath, get_sber
 from src.sber.constants import (
     DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
     DEFAULT_HALLUCINATION_SCORE_THRESHOLD,
+    DEFAULT_SBER_SCRIPT_ENABLE_AUTO_SUBPROCESS,
     DEFAULT_SBER_SCRIPT_BATCH_SIZE,
+    DEFAULT_SBER_SCRIPT_SUBPROCESS_MAX_WORKERS,
+    DEFAULT_SBER_SCRIPT_SUBPROCESS_MIN_FREE_GPU_MEMORY_MIB,
     DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX,
     DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN,
     DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN,
@@ -48,6 +54,9 @@ class ScriptConfig(BaseModel):
         temperature_max: Верхняя граница температуры после clipping.
         output_csv: Путь к итоговому CSV с фичами.
         force_download: Принудительная перезагрузка датасетов.
+        enable_auto_subprocess: Включает авто-запуск дополнительных subprocess при свободной VRAM.
+        subprocess_max_workers: Максимальное число процессов для параллельной обработки.
+        subprocess_min_free_gpu_memory_mib: Минимум свободной VRAM для добавления одного процесса.
         datasets_config_path: Опциональный путь к YAML-конфигу датасетов.
         feature_config_path: Опциональный путь к YAML-конфигу фичей.
     """
@@ -65,6 +74,9 @@ class ScriptConfig(BaseModel):
     temperature_max: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX
     output_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME)
     force_download: bool = False
+    enable_auto_subprocess: bool = DEFAULT_SBER_SCRIPT_ENABLE_AUTO_SUBPROCESS
+    subprocess_max_workers: int = DEFAULT_SBER_SCRIPT_SUBPROCESS_MAX_WORKERS
+    subprocess_min_free_gpu_memory_mib: int = DEFAULT_SBER_SCRIPT_SUBPROCESS_MIN_FREE_GPU_MEMORY_MIB
     datasets_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "datasets_configs.yaml")
     feature_config_path: PathLike | None = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
 
@@ -74,6 +86,14 @@ class ScriptConfig(BaseModel):
         """Проверяет, что числовые параметры положительные."""
         if value <= 0:
             raise ValueError("Параметр должен быть положительным")
+        return value
+
+    @field_validator("subprocess_max_workers", "subprocess_min_free_gpu_memory_mib")
+    @classmethod
+    def validate_subprocess_params(cls, value: int) -> int:
+        """Проверяет параметры автозапуска subprocess."""
+        if value <= 0:
+            raise ValueError("Параметр subprocess должен быть положительным")
         return value
 
     @field_validator("n")
@@ -164,6 +184,24 @@ def parse_args() -> ScriptConfig:
         help="Путь до итогового CSV",
     )
     parser.add_argument("--force-download", action="store_true", help="Принудительно перекачать датасеты")
+    parser.add_argument(
+        "--enable-auto-subprocess",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_SBER_SCRIPT_ENABLE_AUTO_SUBPROCESS,
+        help="Автоматически запускать дополнительные subprocess при достаточной свободной VRAM",
+    )
+    parser.add_argument(
+        "--subprocess-max-workers",
+        type=int,
+        default=DEFAULT_SBER_SCRIPT_SUBPROCESS_MAX_WORKERS,
+        help="Максимальное число процессов для параллельной обработки",
+    )
+    parser.add_argument(
+        "--subprocess-min-free-gpu-memory-mib",
+        type=int,
+        default=DEFAULT_SBER_SCRIPT_SUBPROCESS_MIN_FREE_GPU_MEMORY_MIB,
+        help="Минимум свободной VRAM (MiB) для запуска дополнительного процесса",
+    )
     parser.add_argument(
         "--datasets-config-path",
         type=str,
@@ -384,6 +422,88 @@ def _extract_logits(model_output: Any) -> torch.Tensor:
     raise ValueError("Не удалось извлечь logits из выхода модели")
 
 
+def _query_free_gpu_memory_mib() -> int | None:
+    """Возвращает свободную VRAM в MiB по `nvidia-smi` для GPU 0."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as error:
+        logger.warning(f"Не удалось получить свободную VRAM через nvidia-smi: {error}")
+        return None
+
+    lines: list[str] = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    first_value: str = lines[0].split()[0]
+    try:
+        return int(first_value)
+    except ValueError:
+        return None
+
+
+def _compute_subprocess_worker_count(
+    *,
+    total_samples: int,
+    auto_enabled: bool,
+    cuda_available: bool,
+    max_workers: int,
+    min_free_gpu_memory_mib: int,
+    free_gpu_memory_mib: int | None,
+) -> int:
+    """Определяет число процессов обработки с учетом доступной VRAM."""
+    if total_samples <= 1:
+        return 1
+    if not auto_enabled or not cuda_available:
+        return 1
+    if free_gpu_memory_mib is None or free_gpu_memory_mib < min_free_gpu_memory_mib:
+        return 1
+
+    memory_based_workers: int = 1 + (free_gpu_memory_mib // min_free_gpu_memory_mib)
+    return max(1, min(total_samples, max_workers, memory_based_workers))
+
+
+def _resolve_subprocess_worker_count(config: ScriptConfig, total_samples: int) -> int:
+    """Обертка для расчета числа процессов с чтением текущей VRAM."""
+    free_gpu_memory_mib: int | None = _query_free_gpu_memory_mib()
+    worker_count: int = _compute_subprocess_worker_count(
+        total_samples=total_samples,
+        auto_enabled=config.enable_auto_subprocess,
+        cuda_available=torch.cuda.is_available(),
+        max_workers=config.subprocess_max_workers,
+        min_free_gpu_memory_mib=config.subprocess_min_free_gpu_memory_mib,
+        free_gpu_memory_mib=free_gpu_memory_mib,
+    )
+    if free_gpu_memory_mib is not None:
+        logger.info(f"Свободная VRAM: {free_gpu_memory_mib} MiB, процессов для экстракции: {worker_count}")
+    else:
+        logger.info(f"Свободная VRAM не определена, процессов для экстракции: {worker_count}")
+    return worker_count
+
+
+def _build_shard_ranges(total: int, workers: int) -> list[tuple[int, int]]:
+    """Делит `total` сэмплов на близкие по размеру непрерывные диапазоны."""
+    if total <= 0:
+        return []
+
+    base_size: int = total // workers
+    remainder: int = total % workers
+    ranges: list[tuple[int, int]] = []
+    start: int = 0
+    for worker_idx in range(workers):
+        shard_size: int = base_size + (1 if worker_idx < remainder else 0)
+        if shard_size <= 0:
+            continue
+        stop: int = start + shard_size
+        ranges.append((start, stop))
+        start = stop
+    return ranges
+
+
 def _prepare_tokenizer(tokenizer: Any) -> Any:
     """Настраивает токенизатор для батчевой генерации на decoder-only моделях."""
     tokenizer.padding_side = "left"
@@ -438,37 +558,14 @@ def _build_model_and_tokenizer(model_name: str) -> tuple[Any, Any, torch.device]
     return model, _prepare_tokenizer(tokenizer), torch.device("cpu")
 
 
-def run(config: ScriptConfig) -> Path:
-    """Запускает полный пайплайн извлечения и сохранения фичей.
-
-    Args:
-        config: Конфигурация запуска.
-
-    Returns:
-        Путь до сохраненного CSV файла.
-    """
-    datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
-
-    datasets_map: dict[str, Any] = retrieve_all_datasets(
-        config=datasets_config,
-        force_download=config.force_download,
-    )
-    sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
-        datasets_map=datasets_map,
-        n=config.n,
-        seed=config.seed,
-    )
-    if config.n is None:
-        logger.info(
-            f"Параметр n не задан: после shuffle выбраны все сэмплы из датасетов (всего {len(sampled_queries)})"
-        )
-    else:
-        per_dataset: int = config.n // len(datasets_map)
-        logger.info(
-            f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
-            f"({per_dataset} из каждого датасета)"
-        )
-
+def _extract_rows_for_samples(
+    *,
+    config: ScriptConfig,
+    sampled_queries: list[str],
+    sampled_answers: list[str],
+    sample_id_offset: int,
+) -> list[dict[str, Any]]:
+    """Выполняет экстракцию фичей для заданного слайса сэмплов."""
     model, tokenizer, input_device = _build_model_and_tokenizer(config.model_name)
     feature_config: FeatureExtractorConfig
     if config.feature_config_path is None:
@@ -479,13 +576,13 @@ def run(config: ScriptConfig) -> Path:
 
     output_rows: list[dict[str, Any]] = []
     feature_columns: list[str] = []
-    sample_counter: int = 0
-    temperature_rng: random.Random = random.Random(config.seed)
+    sample_counter: int = sample_id_offset
+    temperature_rng: random.Random = random.Random(config.seed + sample_id_offset)
 
     with torch.inference_mode():
         with extractor:  # type: ignore[arg-type]
             total_batches: int = (len(sampled_queries) + config.batch_size - 1) // config.batch_size
-            progress_bar = tqdm(total=total_batches, desc="Извлечение фичей")
+            progress_bar = tqdm(total=total_batches, desc="Извлечение фичей", disable=sample_id_offset != 0)
             for batch_queries, batch_answers in _batched_pairs(
                 queries=sampled_queries,
                 answers=sampled_answers,
@@ -565,11 +662,115 @@ def run(config: ScriptConfig) -> Path:
                     output_rows.append(row)
                     sample_counter += 1
 
-                    # gc
                     del full_ids, logits, extracted_features, feature_vector
 
                 progress_bar.update(1)
             progress_bar.close()
+
+    return output_rows
+
+
+def _extract_rows_worker(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Воркeр multiprocessing для экстракции фичей на шардe."""
+    config: ScriptConfig = ScriptConfig.model_validate(payload["config"])
+    sampled_queries: list[str] = list(payload["queries"])
+    sampled_answers: list[str] = list(payload["answers"])
+    sample_id_offset: int = int(payload["sample_id_offset"])
+    return _extract_rows_for_samples(
+        config=config,
+        sampled_queries=sampled_queries,
+        sampled_answers=sampled_answers,
+        sample_id_offset=sample_id_offset,
+    )
+
+
+def _extract_rows_in_parallel(
+    *,
+    config: ScriptConfig,
+    sampled_queries: list[str],
+    sampled_answers: list[str],
+    worker_count: int,
+) -> list[dict[str, Any]]:
+    """Запускает multiprocessing-экстракцию по шардированным сэмплам."""
+    shard_ranges: list[tuple[int, int]] = _build_shard_ranges(total=len(sampled_queries), workers=worker_count)
+    payloads: list[dict[str, Any]] = []
+    for start, stop in shard_ranges:
+        payloads.append(
+            {
+                "config": config.model_dump(),
+                "queries": sampled_queries[start:stop],
+                "answers": sampled_answers[start:stop],
+                "sample_id_offset": start,
+            }
+        )
+
+    output_rows: list[dict[str, Any]] = []
+    with ProcessPoolExecutor(max_workers=worker_count, mp_context=get_context("spawn")) as executor:
+        futures = [executor.submit(_extract_rows_worker, payload) for payload in payloads]
+        for future in futures:
+            output_rows.extend(future.result())
+
+    output_rows.sort(key=lambda row: int(row["sample_id"]))
+    return output_rows
+
+
+def run(config: ScriptConfig) -> Path:
+    """Запускает полный пайплайн извлечения и сохранения фичей.
+
+    Args:
+        config: Конфигурация запуска.
+
+    Returns:
+        Путь до сохраненного CSV файла.
+    """
+    datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
+
+    datasets_map: dict[str, Any] = retrieve_all_datasets(
+        config=datasets_config,
+        force_download=config.force_download,
+    )
+    sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
+        datasets_map=datasets_map,
+        n=config.n,
+        seed=config.seed,
+    )
+    if config.n is None:
+        logger.info(
+            f"Параметр n не задан: после shuffle выбраны все сэмплы из датасетов (всего {len(sampled_queries)})"
+        )
+    else:
+        per_dataset: int = config.n // len(datasets_map)
+        logger.info(
+            f"После balanced sampling и shuffle выбрано {len(sampled_queries)} сэмплов "
+            f"({per_dataset} из каждого датасета)"
+        )
+
+    worker_count: int = _resolve_subprocess_worker_count(config=config, total_samples=len(sampled_queries))
+    output_rows: list[dict[str, Any]]
+    if worker_count <= 1:
+        output_rows = _extract_rows_for_samples(
+            config=config,
+            sampled_queries=sampled_queries,
+            sampled_answers=sampled_answers,
+            sample_id_offset=0,
+        )
+    else:
+        logger.info(f"Запускаю параллельную экстракцию в {worker_count} процессах")
+        try:
+            output_rows = _extract_rows_in_parallel(
+                config=config,
+                sampled_queries=sampled_queries,
+                sampled_answers=sampled_answers,
+                worker_count=worker_count,
+            )
+        except Exception as error:
+            logger.warning(f"Параллельный режим завершился с ошибкой ({error}), fallback на single-process")
+            output_rows = _extract_rows_for_samples(
+                config=config,
+                sampled_queries=sampled_queries,
+                sampled_answers=sampled_answers,
+                sample_id_offset=0,
+            )
 
     dataframe: pd.DataFrame = pd.DataFrame(output_rows)
     output_path: Path = Path(config.output_csv)
