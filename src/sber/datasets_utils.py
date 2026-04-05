@@ -135,7 +135,6 @@ def download_rubq_archive_with_kaggle_api(
 
     target_dir.mkdir(parents=True, exist_ok=True)
     api: Any = kaggle_api_cls()
-    api.authenticate()
     api.dataset_download_files(
         dataset=config.rubq_slug,
         path=str(target_dir),
