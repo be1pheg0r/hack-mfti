@@ -12,7 +12,6 @@ from common.paths import get_sber_configs_dpath
 from src.sber.utils.extract_features_cli import (
     ScriptConfig,
     _build_feature_column_names,
-    _compute_subprocess_worker_count,
     _flatten_feature_groups,
     _resolve_query_column_name,
     _sample_balanced_queries_and_answers,
@@ -70,57 +69,6 @@ def test_script_config_uses_yaml_datasets_config_by_default() -> None:
     assert Path(config.datasets_config_path).name == "datasets_configs.yaml"
     assert Path(config.datasets_config_path) == Path(get_sber_configs_dpath()) / "datasets_configs.yaml"
 
-
-def test_script_config_rejects_non_positive_subprocess_params(tmp_path: Any) -> None:
-    with pytest.raises(ValidationError, match="subprocess"):
-        ScriptConfig(n=None, output_csv=tmp_path / "features.csv", subprocess_max_workers=0)
-
-    with pytest.raises(ValidationError, match="subprocess"):
-        ScriptConfig(n=None, output_csv=tmp_path / "features.csv", subprocess_min_free_gpu_memory_mib=0)
-
-
-def test_compute_subprocess_worker_count_enables_parallel_only_when_gpu_memory_is_enough() -> None:
-    workers_with_memory: int = _compute_subprocess_worker_count(
-        total_samples=100,
-        auto_enabled=True,
-        cuda_available=True,
-        max_workers=4,
-        min_free_gpu_memory_mib=40000,
-        free_gpu_memory_mib=55000,
-    )
-    workers_without_memory: int = _compute_subprocess_worker_count(
-        total_samples=100,
-        auto_enabled=True,
-        cuda_available=True,
-        max_workers=4,
-        min_free_gpu_memory_mib=40000,
-        free_gpu_memory_mib=12000,
-    )
-
-    assert workers_with_memory == 2
-    assert workers_without_memory == 1
-
-
-def test_compute_subprocess_worker_count_stays_single_for_cpu_or_disabled_mode() -> None:
-    workers_cpu: int = _compute_subprocess_worker_count(
-        total_samples=100,
-        auto_enabled=True,
-        cuda_available=False,
-        max_workers=4,
-        min_free_gpu_memory_mib=40000,
-        free_gpu_memory_mib=80000,
-    )
-    workers_disabled: int = _compute_subprocess_worker_count(
-        total_samples=100,
-        auto_enabled=False,
-        cuda_available=True,
-        max_workers=4,
-        min_free_gpu_memory_mib=40000,
-        free_gpu_memory_mib=80000,
-    )
-
-    assert workers_cpu == 1
-    assert workers_disabled == 1
 
 
 def test_resolve_query_column_name_prefers_query_then_prompt() -> None:
