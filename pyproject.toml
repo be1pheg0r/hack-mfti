@@ -13,10 +13,11 @@ dependencies = [
     "pyyaml",
     "pydantic",
     "pandas",
+    "numpy",
     "scikit-learn",
+    "catboost",
     "matplotlib",
     "seaborn",
-    "datasets",
     "torch",
     "accelerate",
     "transformers",
@@ -24,17 +25,20 @@ dependencies = [
     "rapidfuzz",
     "huggingface-hub",
     "gradio",
-    "kaggle",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "datasets",
+    "kaggle",
     "jupyter",
     "optuna",
+    "imbalanced-learn",
+    "xgboost",
+    "lightgbm",
     "umap-learn",
     "sentence-transformers",
-    "accelerate",
 ]
 mistralai = [
     "mistralai",

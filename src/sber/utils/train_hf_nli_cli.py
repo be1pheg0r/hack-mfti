@@ -23,7 +23,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_
 from transformers import logging as hf_logging
 
 from common.configs import load_config_from_namespace, load_pydantic_config
-from common.logger import SBER_NLI_TRAIN_LOGGER as logger
+from common.logger import SBER_TRAIN_LOGGER as logger
 from common.paths import PathLike, get_data_bench_dpath, get_data_raw_dpath, get_model_dpath
 from src.sber.constants import (
     DEFAULT_SBER_HF_MODEL_REPO_ID,

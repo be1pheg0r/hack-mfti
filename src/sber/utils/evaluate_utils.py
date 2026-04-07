@@ -319,7 +319,7 @@ def build_text_report(
 
     lines: list[str] = []
     lines.append("=" * 88)
-    lines.append("SBER NLI SCORING REPORT")
+    lines.append("SBER TABULAR SCORING REPORT")
     lines.append("=" * 88)
     lines.append(f"output_csv: {Path(output_csv_fpath)}")
     lines.append("-" * 88)

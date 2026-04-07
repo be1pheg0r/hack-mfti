@@ -3,7 +3,7 @@ from functools import wraps
 from pathlib import Path
 from typing import *
 
-ANCHOR = "anch"
+ANCHOR = "pyproject.toml"
 P = ParamSpec("P")
 PathLike = str | Path
 
@@ -152,3 +152,10 @@ def get_mistral_api_keys_fpath() -> PathLike:
 def get_checkpoints_dpath() -> PathLike:
     """Возвращает каталог общего кэша контрольных точек."""
     return get_project_root() / "checkpoints"
+
+
+@fixdir
+def get_public_checkpoints_dpath() -> PathLike:
+    """Возвращает каталог публичных чекпоинтов в корне репозитория."""
+    return get_project_root() / "public_checkpoints"
+

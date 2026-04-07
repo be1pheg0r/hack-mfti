@@ -6,7 +6,13 @@ from typing import *
 from common.configs import load_config_from_namespace
 from common.logger import GRADIO_DEMO_LOGGER as logger
 from src.sber.constants import DEFAULT_GRADIO_DEMO_CONFIG_FPATH
-from src.servers.utils.gradio_demo_utils import GradioDemoConfig, build_gradio_predict_fn
+from src.servers.utils.gradio_demo_utils import (
+    GradioDemoConfig,
+    QUICK_QUERY_EXAMPLES,
+    build_gradio_dummy_predict_fn,
+    build_gradio_predict_fn,
+    preload_dummy_samples,
+)
 
 
 def _build_textbox(gr: Any, **kwargs: Any) -> Any:
@@ -21,7 +27,7 @@ def _build_textbox(gr: Any, **kwargs: Any) -> Any:
 
 def parse_args(argv: Sequence[str] | None = None) -> GradioDemoConfig:
     """Парсит CLI и возвращает итоговую конфигурацию Gradio demo."""
-    parser = argparse.ArgumentParser(description="Запуск Gradio demo для пайплайна vLLM -> HF NLI")
+    parser = argparse.ArgumentParser(description="Запуск Gradio demo для пайплайна featureextractor -> tabular_classifier")
     parser.add_argument(
         "--config-path",
         type=str,
@@ -31,10 +37,16 @@ def parse_args(argv: Sequence[str] | None = None) -> GradioDemoConfig:
     parser.add_argument("--host", type=str, default=None, help="Адрес Gradio UI")
     parser.add_argument("--port", type=int, default=None, help="Порт Gradio UI")
     parser.add_argument("--title", type=str, default=None, help="Заголовок интерфейса")
-    parser.add_argument("--vllm-base-url", type=str, default=None, help="Базовый URL vLLM-сервера")
-    parser.add_argument("--vllm-model-name", type=str, default=None, help="Имя модели для vLLM endpoint")
-    parser.add_argument("--hf-nli-base-url", type=str, default=None, help="Базовый URL HF NLI сервера")
+    parser.add_argument("--pipeline-base-url", type=str, default=None, help="Базовый URL tabular pipeline сервера")
     parser.add_argument("--timeout-sec", type=float, default=None, help="Таймаут HTTP-запросов")
+    parser.add_argument("--classification-threshold", type=float, default=None, help="Порог label по hallucination_score")
+    parser.add_argument(
+        "--dummy-mode",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Включить dummy UX (случайный train-пример без ручного ввода)",
+    )
+    parser.add_argument("--dummy-examples-csv", type=str, default=None, help="Путь к train CSV для dummy-примеров")
     parser.add_argument(
         "--share",
         action=argparse.BooleanOptionalAction,
@@ -52,22 +64,26 @@ def parse_args(argv: Sequence[str] | None = None) -> GradioDemoConfig:
 
 
 def build_gradio_app(config: GradioDemoConfig) -> Any:
-    """Создает Gradio UI для HTTP-пайплайна vLLM -> HF NLI."""
+    """Создает Gradio UI для HTTP-пайплайна featureextractor -> tabular_classifier."""
     try:
         import gradio as gr
     except ImportError as error:
         raise RuntimeError("Пакет gradio не установлен. Установи зависимости проекта.") from error
 
     predict = build_gradio_predict_fn(config)
-    llm_name: str = config.vllm_model_name.strip() if config.vllm_model_name.strip() else "LLM"
-    llm_label: str = f"Ответ {llm_name}"
-
+    predict_dummy = build_gradio_dummy_predict_fn(config)
     with gr.Blocks(title=config.title) as app:
         gr.Markdown(f"# {config.title}")
-        gr.Markdown(
-            "**Pipeline:** `User query -> vLLM (/v1/chat/completions) -> HF NLI (/v1/hf-nli/predict)`  \n"
-            "Введите запрос ниже: ответ модели будет автоматически проверен на галлюцинацию."
-        )
+        if config.dummy_mode:
+            gr.Markdown(
+                "**Pipeline:** `Dummy sample from train -> tabular_classifier`  \n"
+                "Нажмите кнопку запуска: система выберет случайный train-пример и покажет результат."
+            )
+        else:
+            gr.Markdown(
+                "**Pipeline:** `Query + Model answer -> featureextractor -> tabular_classifier`  \n"
+                "Введите запрос и ответ модели: backend вернет оценку на галлюцинацию."
+            )
 
         with gr.Row():
             with gr.Column(scale=3):
@@ -75,34 +91,64 @@ def build_gradio_app(config: GradioDemoConfig) -> Any:
                     label="Запрос",
                     lines=5,
                     placeholder="Например: Кто написал роман 'Война и мир'?",
-                    info="Текст отправляется в vLLM, затем результат проверяется HF NLI.",
+                    info="Запрос используется для извлечения фичей.",
+                    interactive=not config.dummy_mode,
+                )
+                model_answer = gr.Textbox(
+                    label="Ответ модели",
+                    lines=6,
+                    placeholder="Например: Роман 'Война и мир' написал Лев Толстой.",
+                    info="Ответ классифицируется tabular-моделью после извлечения фичей.",
+                    interactive=not config.dummy_mode,
+                )
+                correct_answer = _build_textbox(
+                    gr,
+                    label="Эталонный ответ (только dummy mode)",
+                    lines=6,
+                    interactive=False,
+                    visible=config.dummy_mode,
+                    show_copy_button=True,
                 )
                 with gr.Row():
-                    run_button = gr.Button("Запустить", variant="primary")
+                    run_button = gr.Button("Запустить" if not config.dummy_mode else "Запустить dummy пример", variant="primary")
                     clear_button = gr.Button("Очистить")
+
+        gr.Markdown("### Быстрые примеры запросов")
+        with gr.Row():
+            for example_query in QUICK_QUERY_EXAMPLES:
+                gr.Button(example_query).click(
+                    fn=lambda value=example_query: value,
+                    inputs=None,
+                    outputs=[query],
+                )
 
             with gr.Column(scale=2):
                 gr.Markdown("### Параметры backend")
-                gr.Markdown(f"- **LLM model:** `{config.vllm_model_name}`")
-                gr.Markdown(f"- **vLLM URL:** `{config.vllm_base_url}`")
-                gr.Markdown(f"- **HF NLI URL:** `{config.hf_nli_base_url}`")
+                gr.Markdown(f"- **Pipeline URL:** `{config.pipeline_base_url}`")
 
         with gr.Row():
-            vllm_answer = _build_textbox(gr, label=llm_label, lines=10, show_copy_button=True)
-            hf_nli_result = _build_textbox(gr, label="Результат HF NLI", lines=4, show_copy_button=True)
+            pipeline_result = _build_textbox(gr, label="Результат классификатора", lines=4, show_copy_button=True)
+            details = _build_textbox(gr, label="Детали запроса", lines=8, show_copy_button=True)
+            stage_timings = _build_textbox(gr, label="Время этапов пайплайна", lines=4, show_copy_button=True)
 
-        gr.Examples(
-            examples=[
-                ["Кто изобрел телефон?"],
-                ["Москва находится в Германии."],
-                ["В каком году началась Первая мировая война?"],
-            ],
-            inputs=[query],
-            label="Примеры запросов",
-        )
-
-        run_button.click(fn=predict, inputs=[query], outputs=[vllm_answer, hf_nli_result])
-        clear_button.click(lambda: ("", "", ""), inputs=None, outputs=[query, vllm_answer, hf_nli_result])
+        if config.dummy_mode:
+            run_button.click(
+                fn=predict_dummy,
+                inputs=None,
+                outputs=[query, model_answer, correct_answer, pipeline_result, details, stage_timings],
+            )
+            clear_button.click(
+                lambda: ("", "", "", "", "", ""),
+                inputs=None,
+                outputs=[query, model_answer, correct_answer, pipeline_result, details, stage_timings],
+            )
+        else:
+            run_button.click(fn=predict, inputs=[query, model_answer], outputs=[pipeline_result, details, stage_timings])
+            clear_button.click(
+                lambda: ("", "", "", "", ""),
+                inputs=None,
+                outputs=[query, model_answer, pipeline_result, details, stage_timings],
+            )
 
     return app
 
@@ -110,12 +156,13 @@ def build_gradio_app(config: GradioDemoConfig) -> Any:
 def run(config: GradioDemoConfig) -> None:
     """Запускает Gradio demo-сервер."""
     logger.info(
-        "Запускаю Gradio demo: host=%s port=%s vllm=%s hf_nli=%s",
+        "Запускаю Gradio demo: host=%s port=%s pipeline=%s",
         config.host,
         config.port,
-        config.vllm_base_url,
-        config.hf_nli_base_url,
+        config.pipeline_base_url,
     )
+    if config.dummy_mode:
+        preload_dummy_samples(config)
     app: Any = build_gradio_app(config)
     try:
         import gradio as gr

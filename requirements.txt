@@ -1,5 +1,18 @@
-# common requirements
+# runtime requirements (inference + servers + demo)
 
 colorama
 pyyaml
 pydantic
+pandas
+numpy
+scikit-learn
+catboost
+matplotlib
+seaborn
+torch
+accelerate
+transformers
+tqdm
+rapidfuzz
+huggingface-hub
+gradio

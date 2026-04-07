@@ -8,7 +8,7 @@ from pathlib import Path
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import disable_progress_bars
 
-from common.logger import SBER_NLI_INFERENCE_LOGGER as logger
+from common.logger import SBER_DATASETS_LOGGER as logger
 from common.paths import PathLike, get_model_dpath
 from ..constants import DEFAULT_SBER_HF_MODEL_DIRNAME
 

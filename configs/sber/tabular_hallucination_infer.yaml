@@ -1,0 +1,6 @@
+tabular_hallucination_infer:
+  checkpoint_dir: "sber_tabular/latest"
+  input_csv: "data/bench/bench_processed_judged_mapped.csv"
+  output_csv: "data/bench/tabular_inference.csv"
+  threshold: null
+

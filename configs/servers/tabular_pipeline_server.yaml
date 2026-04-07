@@ -1,0 +1,10 @@
+tabular_pipeline_server:
+  host: "0.0.0.0"
+  port: 8020
+  serve_mode: "tabular_pipeline"
+  feature_model_name: "ai-sage/GigaChat3-10B-A1.8B-bf16"
+  feature_extractor_mode: "real"
+  checkpoint_dir: "sber_tabular/latest"
+  feature_config_path: "configs/sber/hooks_config.yaml"
+
+

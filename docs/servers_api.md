@@ -1,122 +1,125 @@
 # API серверов
 
-Документ описывает HTTP API для серверов `vLLM` и `HF NLI`, которые используются в проекте.
+Актуальная серверная схема проекта:
+- [`scripts/tabular_pipeline_server.py`](../scripts/tabular_pipeline_server.py) -> HTTP API классификации.
+- [`src/servers/tabular_pipeline_server.py`](../src/servers/tabular_pipeline_server.py) -> реализация сервера.
+- [`configs/servers/tabular_pipeline_server.yaml`](../configs/servers/tabular_pipeline_server.yaml) -> конфиг tabular backend.
+- [`src/servers/gradio_demo.py`](../src/servers/gradio_demo.py) -> Gradio UI клиент к tabular backend.
+- [`configs/servers/gradio_demo.yaml`](../configs/servers/gradio_demo.yaml) -> конфиг Gradio.
+- [`scripts/init_servers.py`](../scripts/init_servers.py) -> оркестратор запуска backend + UI.
 
-## 1) vLLM сервер (для end-to-end пайплайна)
+Подробные CLI-аргументы: [`docs/scripts.md`](scripts.md).
 
-CLI запуск:
+## 1) Tabular Pipeline HTTP сервер
+
+### Запуск
 
 ```bash
-python -m src.servers.vllm_server --config-path configs/servers/vllm_server.yaml
-python -m src.servers.vllm_server --config-path configs/servers/vllm_server_dummy.yaml --serve-mode dummy
+python scripts/tabular_pipeline_server.py --config-path configs/servers/tabular_pipeline_server.yaml
+```
+
+Через оркестратор:
+
+```bash
+python scripts/init_servers.py
+python scripts/init_servers.py --dummy
 ```
 
 ### Endpoints
 
-- `GET /health` и `GET /v1/health`
-  - Ответ: `{"status": "ok", "mode": "vllm|dummy"}`
+- `GET /health`
+  - Ответ: `{"status": "ok"}`
 
-- `GET /v1/models`
-  - OpenAI-compatible список моделей.
+- `POST /v1/tabular/predict`
+  - Назначение: оценка галлюцинации для одной или нескольких пар `query/model_answer`.
 
-- `POST /v1/chat/completions`
-  - OpenAI-compatible chat completions.
+### Варианты входного payload
 
-- `POST /v1/completions`
-  - OpenAI-compatible completions.
-
-### Пример запроса (dummy)
-
-```bash
-curl -X POST "http://127.0.0.1:8000/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "dummy-vllm",
-    "messages": [
-      {"role": "user", "content": "Привет"}
-    ]
-  }'
-```
-
-## 2) HF NLI (Бертовый классификатор) сервер
-
-CLI запуск:
-
-```bash
-python -m src.servers.hf_nli_server --config-path configs/servers/hf_nli_server.yaml
-python -m src.servers.hf_nli_server --config-path configs/servers/hf_nli_server_dummy.yaml --serve-mode dummy
-```
-
-### Endpoints
-
-- `GET /health` и `GET /v1/health`
-  - Ответ: `{"status": "ok", "mode": "hf_nli|dummy", "model": "..."}`
-
-- `POST /v1/hf-nli/predict`
-  - Назначение: классификация пар `correct_answer/model_answer` на галлюцинацию.
-  - Вход:
-    - `premises: list[str]` (или alias `correct_answers`)
-    - `hypotheses: list[str]` (или alias `model_answers`)
-    - `batch_size: int` (опционально)
-  - Выход:
-    - `model: str`
-    - `pred_is_hallucination: list[int]`
-    - `hallucination_score: list[float]`
-    - `entailment_score: list[float]`
-
-### Пример запроса
-
-```bash
-curl -X POST "http://127.0.0.1:8010/v1/hf-nli/predict" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "premises": ["Париж - столица Франции"],
-    "hypotheses": ["Париж - столица Франции"],
-    "batch_size": 8
-  }'
-```
-
-### Пример ответа
+1) **Single-pair** формат:
 
 ```json
 {
-  "model": "be1pheg0r/hack-mfti-sbercase",
-  "pred_is_hallucination": [0],
-  "hallucination_score": [0.12],
-  "entailment_score": [0.88]
+  "query": "Кто написал Войну и мир?",
+  "model_answer": "Лев Толстой",
+  "threshold": 0.5
 }
 ```
 
-## Ошибки API
+2) **Batch** формат:
 
-- `404` для неизвестного endpoint.
-- `400` для невалидного payload (разная длина списков, неверные типы, пустые поля и т.д.).
+```json
+{
+  "queries": ["q1", "q2"],
+  "model_answers": ["a1", "a2"],
+  "threshold": 0.5
+}
+```
 
-## 3) Gradio demo (vLLM -> HF NLI)
+3) **Single-pair + precomputed features** (для bypass LLM и работы по train-фичам):
 
-CLI запуск:
+```json
+{
+  "query": "q",
+  "model_answer": "a",
+  "threshold": 0.5,
+  "features": {
+    "mean_log_prob": -0.2,
+    "n_answer_tokens": 12.0
+  }
+}
+```
+
+### Формат ответа
+
+```json
+{
+  "pred_is_hallucination": [0],
+  "hallucination_score": [0.12],
+  "entailment_score": [0.88],
+  "t_feature_extraction_sec": [0.034],
+  "t_classification_sec": [0.004],
+  "t_total_sec": [0.038],
+  "t_sample_sec": [0.038]
+}
+```
+
+Примечания:
+- `pred_is_hallucination`: `1` = галлюцинация, `0` = не галлюцинация.
+- `t_sample_sec` сохранен для обратной совместимости и равен `t_total_sec`.
+
+## 2) Gradio Demo
+
+### Запуск
 
 ```bash
 python -m src.servers.gradio_demo --config-path configs/servers/gradio_demo.yaml
 ```
 
-Что делает demo:
-
-- принимает пользовательский запрос в виджете;
-- отправляет его в `vLLM` по `POST /v1/chat/completions`;
-- берет ответ `vLLM` и отправляет в `HF NLI` по `POST /v1/hf-nli/predict`;
-- выводит текст ответа `vLLM` и итог `HF NLI` (`галлюцинация`/`не галлюцинация`).
-
-Важно: перед запуском demo должны уже быть подняты оба backend-сервера.
-
-Пример с override через CLI:
+Или через оркестратор:
 
 ```bash
-python -m src.servers.gradio_demo \
-  --config-path configs/servers/gradio_demo.yaml \
-  --vllm-base-url http://127.0.0.1:8000 \
-  --hf-nli-base-url http://127.0.0.1:8010 \
-  --host 127.0.0.1 \
-  --port 7860
+python scripts/init_servers.py
 ```
+
+### Что делает demo
+
+- отправляет запросы в tabular backend (`POST /v1/tabular/predict`);
+- показывает:
+  - лейбл классификации;
+  - score;
+  - время этапов пайплайна (`feature_extraction`, `classification`, `total`);
+- в `dummy mode` берет случайный train-сэмпл из CSV и отправляет precomputed features.
+
+### Важные поля Gradio-конфига
+
+См. [`configs/servers/gradio_demo.yaml`](../configs/servers/gradio_demo.yaml):
+- `pipeline_base_url` — URL tabular backend;
+- `classification_threshold` — порог интерпретации score в лейбл;
+- `dummy_mode` — режим smoke-теста без ручного ввода;
+- `dummy_examples_csv` — CSV с train-примерами для dummy режима.
+
+## 3) Ошибки API
+
+- `404` — неизвестный endpoint.
+- `400` — невалидный payload (неверные типы, пустые списки, несоответствие длин и т.д.).
 

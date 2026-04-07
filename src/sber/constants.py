@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from common.paths import PathLike, get_servers_configs_dpath, get_sber_configs_dpath
 
-DEFAULT_PROBE_LAYERS: list[int] = [0, 4, 8, 12, 16, 20, 24, 28, 31]
+DEFAULT_PROBE_LAYERS: list[int] = [0, 4, 8, 12, 16, 20, 24, 25]
 DEFAULT_LOGIT_EPSILON: float = 1e-10
 DEFAULT_ATTENTION_EPSILON: float = 1e-10
 DEFAULT_ENABLE_ATTENTION_ENTROPY: bool = True
@@ -39,6 +39,8 @@ DEFAULT_SBER_HF_NLI_POSITIVE_CLASS_INDEX: int = 1
 DEFAULT_SBER_HF_NLI_COMPUTE_DTYPE: str = "float32"
 DEFAULT_SBER_HF_NLI_BASE_MODEL_REPO_ID: str = "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
 DEFAULT_SBER_HF_NLI_TRAIN_CONFIG_FPATH: PathLike = get_sber_configs_dpath() / "hf_nli_train.yaml"
+DEFAULT_SBER_TABULAR_TRAIN_CONFIG_FPATH: PathLike = get_sber_configs_dpath() / "tabular_hallucination_train.yaml"
+DEFAULT_SBER_TABULAR_INFER_CONFIG_FPATH: PathLike = get_sber_configs_dpath() / "tabular_hallucination_infer.yaml"
 
 DEFAULT_VLLM_MODEL_NAME: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
 DEFAULT_VLLM_SERVE_MODE: str = "vllm"
@@ -59,12 +61,17 @@ DEFAULT_HF_NLI_SERVER_HOST: str = "0.0.0.0"
 DEFAULT_HF_NLI_SERVER_PORT: int = 8010
 DEFAULT_HF_NLI_SERVER_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "hf_nli_server.yaml"
 
+DEFAULT_TABULAR_PIPELINE_SERVER_HOST: str = "0.0.0.0"
+DEFAULT_TABULAR_PIPELINE_SERVER_PORT: int = 8020
+DEFAULT_TABULAR_PIPELINE_SERVER_MODE: str = "tabular_pipeline"
+DEFAULT_TABULAR_PIPELINE_SERVER_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "tabular_pipeline_server.yaml"
+
 DEFAULT_GRADIO_DEMO_HOST: str = "0.0.0.0"
 DEFAULT_GRADIO_DEMO_PORT: int = 7860
 DEFAULT_GRADIO_DEMO_SHARE: bool = False
-DEFAULT_GRADIO_DEMO_TITLE: str = "Sber vLLM + HF NLI Demo"
-DEFAULT_GRADIO_DEMO_VLLM_BASE_URL: str = "http://127.0.0.1:8000"
-DEFAULT_GRADIO_DEMO_HF_NLI_BASE_URL: str = "http://127.0.0.1:8010"
+DEFAULT_GRADIO_DEMO_TITLE: str = "Sber FeatureExtractor + Tabular Classifier Demo"
+DEFAULT_GRADIO_DEMO_PIPELINE_BASE_URL: str = "http://127.0.0.1:8020"
 DEFAULT_GRADIO_DEMO_TIMEOUT_SEC: float = 60.0
+DEFAULT_GRADIO_DEMO_CLASSIFICATION_THRESHOLD: float = 0.5
 DEFAULT_GRADIO_DEMO_CONFIG_FPATH: PathLike = get_servers_configs_dpath() / "gradio_demo.yaml"
 

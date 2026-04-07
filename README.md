@@ -1,38 +1,55 @@
-# hack-mfti
+# IT Purple Hack 2026 | Сбер | RnD Свердловской синагоги
 
-Репозиторий с решением кейса Sber для IT Purple Hack 2026.
+---
+## Краткое описание подхода
 
-## Структура
+Для определения галлюцинаций в ответах модели `ai-sage/GigaChat3.1-10B-A1.8B-bf16` при pass forward извлекаются
+следующие признаки:
 
-- `configs/` — конфиги проекта, включая `configs/sber/hooks_config.yaml`.
-- `data/bench/` — benchmark-файлы, включая `knowledge_bench_private.csv` и `knowledge_bench_private_scores.csv`.
-- `data/raw/` — сырые датасеты и производные таблицы.
-- `model/` — локальный cache моделей или пустой каталог, если модель загружается с Hugging Face.
-- `src/sber/` — канонический Python-код кейса.
-- `scripts/` — входные скрипты для извлечения фичей, установки и скоринга.
-- `notebooks/sber/` — ноутбуки и исследовательские артефакты.
-- `tests/` — pytest-тесты.
+1. **Uncertainty features** (12 признаков) — статистики по логитам токенов ответа: среднее/мин/макс/std log-вероятностей, среднее/мин/макс/std энтропии распределения, длина ответа в токенах, log-prob первого токена, средние top-1 и top-5 вероятности.
 
-## Быстрый старт
+2. **Internal scalars** (3 × N_probe_layers признаков) — поэлементные скаляры из probe-слоёв: L2-норма hidden state последнего токена промпта, средняя L2-норма hidden states токенов ответа, средняя logit-lens энтропия по токенам ответа.
 
+3. **Probe vector** (hidden_size признаков) — усреднённый по всем probe-слоям вектор mean-pooling hidden states токенов ответа. Используется как dense embedding для downstream-классификатора.
+
+4. **Attention entropy** (3 × N_probe_layers признаков, опционально) — статистики энтропии attention weights по токенам ответа в каждом probe-слое: среднее, максимум, std.
+
+5. **Entropy drops** (N_probe_layers − 1 признаков) — разности logit-lens энтропий между соседними probe-слоями.
+
+6. **MoE routing features** (10 признаков, опционально) — агрегированные routing-статистики по токенам ответа: mean/std максимальной routing-вероятности, mean/std std routing-вероятностей, mean/std routing-энтропии, mean/std std routing-энтропии, mean/std доли уникальных активных экспертов.
+
+На *некоторых* из этих групп признаков обучались бустинги (CatBoost, LightGBM, XGBoost) и логистическая регрессия. Последняя на момент 07.04 используется для инференса.
+
+---
+## Установка и запуск
+
+* Python: 3.10>=, 3.13<
+
+### Установка
+
+Установка зависимостей. В корне репозитория:
 ```bash
-python -m pip install -r requirements.txt -r requirements-dev.txt
+pip install -e .
+
+# develop extras для обучения и тестов
+pip install -e .[dev]
 ```
 
-## Основные команды
-
+### Запуск
+1. Валидация last state модели на публичном бенче (скрипт: [`scripts/evaluate.py`](scripts/evaluate.py)):
 ```bash
-bash scripts/install.sh
-bash scripts/score_private.sh
+python scripts/evaluate.py
 ```
 
-Если нужен feature extraction pipeline:
-
+2. Запуск демо сервера на Gradio (скрипт: [`scripts/init_servers.py`](scripts/init_servers.py)):
 ```bash
-python scripts/extract_features.py --n 16
+python scripts/init_servers.py
 ```
 
-## Примечание по данным
+3. Обучение (требует опциональных зависимостей, скрипт: [`scripts/train_tabular_hallucination.py`](scripts/train_tabular_hallucination.py)):
+```bash
+python scripts/train_tabular_hallucination.py 
+```
 
-Датасеты не анонимизированы: в репозитории оставлены текстовые исходники и код препроцессинга, чтобы можно было восстановить признаки end-to-end и проверить решение без подмешивания приватного теста.
+Сигнатуры и параметры отдельных скриптов можно посмотреть через `--help` или в [`docs/scripts.md`](docs/scripts.md).
 

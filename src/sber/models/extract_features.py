@@ -234,9 +234,15 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
 
     def _get_layers(self) -> Any:
         """Возвращает список hidden layers модели и валидирует его наличие."""
-        layers: Any = getattr(getattr(self.model, "model", None), "layers", None)
+        layer_candidates: list[Any] = [
+            getattr(getattr(self.model, "model", None), "layers", None),
+            getattr(self.model, "layers", None),
+            getattr(getattr(getattr(self.model, "base_model", None), "model", None), "layers", None),
+            getattr(getattr(self.model, "transformer", None), "h", None),
+        ]
+        layers: Any = next((candidate for candidate in layer_candidates if candidate is not None), None)
         if layers is None:
-            raise ValueError("У модели не найден атрибут model.layers")
+            raise ValueError("У модели не найден список скрытых слоев (model.layers / layers / transformer.h)")
         return layers
 
     def _infer_hidden_size(self) -> int:

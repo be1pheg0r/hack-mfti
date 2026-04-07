@@ -1,0 +1,67 @@
+tabular_hallucination_train:
+  train_csv: "data/raw/merged_features_with_judge_scores.csv"
+  val_csv: "data/bench/bench_processed_judged_mapped.csv"
+  target_col: "is_hallucination"
+  run_name: null
+  output_root: "public_checkpoints/sber_tabular"
+
+  feature_flags:
+    uncertainty: true
+    internal_scalars: true
+    probe_vec: false
+    attention_entropy: true
+    entropy_drops: true
+    moe_routing: true
+    text_features: true
+    tfidf: false
+
+  pca_n_components: 128
+  tfidf_max_features: 1000
+  tfidf_n_components: 64
+  scaling: false
+  under_sampling: false
+  oversampling: true
+  bad_features:
+    - "min_entropy"
+    - "std_entropy"
+
+  plot_feature_distributions: false
+  feature_plot_batch_size: 24
+  feature_plot_dir: null
+
+  model_variants:
+    - name: "catboost_base"
+      architecture: "catboost"
+      enabled: true
+      params: {}
+    - name: "xgboost_base"
+      architecture: "xgboost"
+      enabled: true
+      params: {}
+    - name: "lightgbm_base"
+      architecture: "lightgbm"
+      enabled: true
+      params: {}
+    - name: "logreg_base"
+      architecture: "logreg"
+      enabled: true
+      params: {}
+
+  optuna:
+    enabled: true
+    n_trials: 15
+    threshold_trials: 30
+    timeout_sec: 600
+
+  ignore_warnings_during_training: true
+
+  random_seed: 42
+  iterations: 10000
+  learning_rate: 0.05
+  depth: 6
+  l2_leaf_reg: 1.0
+  subsample: 0.8
+  colsample_bylevel: 0.8
+  min_data_in_leaf: 20
+  early_stopping_rounds: 50
+

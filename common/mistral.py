@@ -138,7 +138,6 @@ def _load_mistral_client_class() -> type[Any]:
     client_class: type[Any] = getattr(module, "Mistral")
     return client_class
 
-
 def build_client(api_key: str) -> Any:
     """Создает клиент Mistral по API-ключу."""
     client_class: type[Any] = _load_mistral_client_class()

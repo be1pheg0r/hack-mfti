@@ -59,7 +59,7 @@ class ProjectLoggerRegistry(BaseModel):
         sber_pt_hooks: Логгер для снятия проб со слоев в кейсе Sber.
         jupyter_notebooks: Логгер для ноутбуков проекта.
         sber_datasets: Логгер для загрузки и подготовки датасетов Sber.
-        sber_nli_train: Логгер для обучения HF NLI классификатора.
+        sber_train: Логгер для обучения HF NLI классификатора.
         vllm_server: Логгер для серверного vLLM smoke/production режима.
         hf_nli_server: Логгер для HTTP-сервера HF NLI классификатора.
         gradio_demo: Логгер для Gradio demo-обвязки серверов vLLM и HF NLI.
@@ -71,11 +71,9 @@ class ProjectLoggerRegistry(BaseModel):
     sber_pt_hooks: LoggerConfig = LoggerConfig(name="sber-pt-hooks", level="DEBUG", prefix="[SBER-HOOKS 🪝] ")
     jupyter_notebooks: LoggerConfig = LoggerConfig(name="jupyter-notebooks", level="INFO", prefix="[JUPYTER 📓] ")
     sber_datasets: LoggerConfig = LoggerConfig(name="sber-datasets", level="INFO", prefix="[SBER-DATASETS 📦] ")
-    sber_nli_train: LoggerConfig = LoggerConfig(name="sber-nli-train", level="INFO", prefix="[SBER-NLI-TRAIN 🏋️] ")
+    sber_train: LoggerConfig = LoggerConfig(name="sber-nli-train", level="INFO", prefix="[SBER-TRAIN 🏋️] ")
+    inference: LoggerConfig = LoggerConfig(name="vllm-server", level="INFO", prefix="[MODEL-INFERENCE 🤖] ")
     evaluation: LoggerConfig = LoggerConfig(name="sber-evaluation", level="INFO", prefix="[SBER-EVALUATION 📊] ")
-    nli_inference: LoggerConfig = LoggerConfig(name="sber-nli-inference", level="INFO", prefix="[SBER-NLI-INFERENCE 🤖] ")
-    vllm_server: LoggerConfig = LoggerConfig(name="vllm-server", level="INFO", prefix="[VLLM 🚀] ")
-    hf_nli_server: LoggerConfig = LoggerConfig(name="hf-nli-server", level="INFO", prefix="[HF-NLI-SERVER 🧠] ")
     gradio_demo: LoggerConfig = LoggerConfig(name="gradio-demo", level="INFO", prefix="[GRADIO-DEMO 🎛️] ")
 
 
@@ -173,12 +171,10 @@ JUPYTER_LOGGER: logging.Logger = get_project_logger("jupyter_notebooks")
 
 SBER_HOOKS_LOGGER: logging.Logger = get_project_logger("sber_pt_hooks")
 SBER_DATASETS_LOGGER: logging.Logger = get_project_logger("sber_datasets")
-SBER_NLI_TRAIN_LOGGER: logging.Logger = get_project_logger("sber_nli_train")
+SBER_TRAIN_LOGGER: logging.Logger = get_project_logger("sber_train")
+INFERENCE_LOGGER: logging.Logger = get_project_logger("inference")
 SBER_EVALUATION_LOGGER: logging.Logger = get_project_logger("evaluation")
-SBER_NLI_INFERENCE_LOGGER: logging.Logger = get_project_logger("nli_inference")
 
-VLLM_SERVER_LOGGER: logging.Logger = get_project_logger("vllm_server")
-HF_NLI_SERVER_LOGGER: logging.Logger = get_project_logger("hf_nli_server")
 GRADIO_DEMO_LOGGER: logging.Logger = get_project_logger("gradio_demo")
 
 

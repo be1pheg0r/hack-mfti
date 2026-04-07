@@ -1,13 +1,14 @@
-optuna
+# install runtime first
+-r requirements.txt
+
+# dev requirements (training + tests)
 pytest
-pandas
-scikit-learn
-jupyter
-matplotlib
-seaborn
 datasets
+kaggle
+jupyter
+optuna
+imbalanced-learn
+xgboost
+lightgbm
 umap-learn
 sentence-transformers
-torch
-accelerate
-rapidfuzz

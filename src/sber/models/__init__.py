@@ -8,8 +8,14 @@ from .extract_features import (
     FeatureGroups,
     LLMFeatureExtractor,
 )
-from .hf_nli_clf import HFNLIClf, HFNLIClfBundle, HFNLIClfConfig
-from .model_loader import SberHFModelLoader, SberModelBundle
+from .tabular_hallucination import (
+    FeatureGroupFlags,
+    TabularHallucinationPredictor,
+    TabularHallucinationTrainer,
+    TabularInferenceConfig,
+    TabularTrainConfig,
+    TrainResult,
+)
 
 __all__ = [
     "DummyFeatureModel",
@@ -17,11 +23,12 @@ __all__ = [
     "FeatureExtractorConfig",
     "FeatureExtractorInput",
     "FeatureGroups",
-    "HFNLIClf",
-    "HFNLIClfBundle",
-    "HFNLIClfConfig",
     "LLMFeatureExtractor",
-    "SberHFModelLoader",
-    "SberModelBundle",
+    "FeatureGroupFlags",
+    "TabularHallucinationPredictor",
+    "TabularHallucinationTrainer",
+    "TabularInferenceConfig",
+    "TabularTrainConfig",
+    "TrainResult",
 ]
 
