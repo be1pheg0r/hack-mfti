@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
+import warnings
 from functools import wraps
 from typing import *
 
+import numpy as np
+import pandas as pd
 from colorama import Fore, Style, init
 from pydantic import BaseModel, ConfigDict, field_validator
+from sklearn.pipeline import Pipeline
 
 init(autoreset=True)
 
@@ -61,7 +65,8 @@ class ProjectLoggerRegistry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     mistral_call: LoggerConfig = LoggerConfig(name="mistral-call", level="DEBUG", prefix="[MISTRAL 🇫🇷] ")
-
+    avito_should_split: LoggerConfig = LoggerConfig(name="avito-should-split", level="INFO", prefix="[SHOULD_SPLIT] ")
+    avito_microcategories: LoggerConfig = LoggerConfig(name="avito-microcategories", level="INFO", prefix="[MICROCATS] ")
 
 class ColoredFormatter(logging.Formatter):
     """Форматтер с цветовым выделением по уровню логирования."""
@@ -153,6 +158,8 @@ def get_project_logger(config_name: str) -> logging.Logger:
 
 
 MISTRAL_LOGGER: logging.Logger = get_project_logger("mistral_call")
+AVITO_SHOULD_SPLIT_LOGGER: logging.Logger = get_project_logger("avito_should_split")
+AVITO_MICROCATS_LOGGER: logging.Logger = get_project_logger("avito_microcategories")
 
 
 def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Callable[P, T]]:
@@ -181,3 +188,57 @@ def log_after_invoke(logger: logging.Logger) -> Callable[[Callable[P, T]], Calla
         return wrapper
 
     return decorator
+
+
+def log_block_separator(logger: logging.Logger) -> None:
+    """Выводит разделитель блока в логи.
+
+    Args:
+        logger: Экземпляр логгера.
+    """
+    logger.info("=" * 88)
+
+
+def predict_with_clean_warnings(pipeline: Pipeline, X_data: pd.DataFrame) -> np.ndarray:
+    """Выполняет предсказание с подавлением ненужных предупреждений.
+
+    Args:
+        pipeline: Обученный sklearn pipeline.
+        X_data: Данные для предсказания.
+
+    Returns:
+        Массив предсказаний.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"X does not have valid feature names, but LGBMClassifier was fitted with feature names",
+            category=UserWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r"No further splits with positive gain",
+            category=UserWarning,
+        )
+        return np.asarray(pipeline.predict(X_data))
+
+
+def fit_model_with_progress(
+    pipeline: Pipeline,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame | None = None,
+    y_val: pd.Series | None = None,
+) -> None:
+    """Обучает модель с поддержкой прогресса для различных архитектур.
+    
+    Для бустеров выводит прогресс обучения по итерациям через verbose параметры.
+    
+    Args:
+        pipeline: sklearn Pipeline с препроцессором и моделью.
+        X_train: Обучающие признаки.
+        y_train: Обучающие метки.
+        X_val: Валидационные признаки (опционально).
+        y_val: Валидационные метки (опционально).
+    """
+    pipeline.fit(X_train, y_train)

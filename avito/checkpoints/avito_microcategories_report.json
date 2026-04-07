@@ -1,0 +1,50 @@
+{
+  "model_name": "one_vs_rest_logreg",
+  "threshold": 0.5,
+  "metrics": {
+    "micro_f1": 0.8480133370380661,
+    "micro_precision": 0.800209753539591,
+    "micro_recall": 0.9018912529550828,
+    "threshold": 0.5
+  },
+  "mlb_classes": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111
+  ],
+  "model_comparison_records": [
+    {
+      "model": "one_vs_rest_logreg",
+      "micro_f1": 0.8404821979254276,
+      "micro_precision": 0.7994666666666667,
+      "micro_recall": 0.8859338061465721,
+      "threshold": 0.5
+    },
+    {
+      "model": "one_vs_rest_xgboost",
+      "micro_f1": 0.8177601060304838,
+      "micro_precision": 0.9306184012066365,
+      "micro_recall": 0.7293144208037825,
+      "threshold": 0.5
+    },
+    {
+      "model": "one_vs_rest_random_forest",
+      "micro_f1": 0.6274509803921569,
+      "micro_precision": 0.9714993804213135,
+      "micro_recall": 0.46335697399527187,
+      "threshold": 0.5
+    }
+  ],
+  "tuned_params": {
+    "C": 0.10179203673745565,
+    "max_iter": 2500
+  }
+}

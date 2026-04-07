@@ -1,0 +1,17 @@
+enabled: true
+params:
+  C: 1.0
+  class_weight: balanced
+  max_iter: 1500
+  solver: liblinear
+for_tune:
+  C:
+    type: float
+    low: 0.01
+    high: 20.0
+    log: true
+  max_iter:
+    type: int
+    low: 500
+    high: 2500
+    step: 250

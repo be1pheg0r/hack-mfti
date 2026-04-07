@@ -95,7 +95,7 @@ def test_build_model_uses_local_path_first(monkeypatch: pytest.MonkeyPatch, tmp_
     local_model_dir = checkpoints_dir / "rubert-mini-frida"
     local_model_dir.mkdir(parents=True)
 
-    monkeypatch.setattr("avito.embeddings.get_checkpoints_dpath", lambda: checkpoints_dir)
+    monkeypatch.setattr("avito.embeddings.get_avito_checkpoints_dpath", lambda: checkpoints_dir)
 
     calls: list[dict[str, Any]] = []
 
@@ -130,7 +130,7 @@ def test_build_model_fallbacks_to_hub(monkeypatch: pytest.MonkeyPatch, tmp_path:
     checkpoints_dir = tmp_path / "checkpoints"
     checkpoints_dir.mkdir(parents=True)
 
-    monkeypatch.setattr("avito.embeddings.get_checkpoints_dpath", lambda: checkpoints_dir)
+    monkeypatch.setattr("avito.embeddings.get_avito_checkpoints_dpath", lambda: checkpoints_dir)
 
     calls: list[dict[str, Any]] = []
 
@@ -166,7 +166,7 @@ def test_build_model_raises_when_both_sources_failed(monkeypatch: pytest.MonkeyP
     local_model_dir = checkpoints_dir / "rubert-mini-frida"
     local_model_dir.mkdir(parents=True)
 
-    monkeypatch.setattr("avito.embeddings.get_checkpoints_dpath", lambda: checkpoints_dir)
+    monkeypatch.setattr("avito.embeddings.get_avito_checkpoints_dpath", lambda: checkpoints_dir)
 
     class _FailFactory:
         def __init__(self, **kwargs: Any) -> None:

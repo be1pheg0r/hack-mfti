@@ -1,0 +1,28 @@
+enabled: true
+params:
+  n_estimators: 350
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.9
+  colsample_bytree: 0.9
+  eval_metric: logloss
+for_tune:
+  n_estimators:
+    type: int
+    low: 150
+    high: 800
+    step: 50
+  max_depth:
+    type: int
+    low: 3
+    high: 12
+    step: 1
+  learning_rate:
+    type: float
+    low: 0.01
+    high: 0.2
+    log: true
+  subsample:
+    type: float
+    low: 0.6
+    high: 1.0
