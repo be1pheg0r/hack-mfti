@@ -1,0 +1,38 @@
+.story-center-wrap {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.story-panel {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 16px;
+  padding: 16px;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.story-content {
+  display: flex;
+  align-items: center;
+}
+
+.story-text {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.4;
+  color: #2b3f20;
+}
+
+@media (max-width: 900px) {
+  .story-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .story-text {
+    font-size: 14px;
+  }
+}
