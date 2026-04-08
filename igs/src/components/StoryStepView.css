@@ -20,6 +20,16 @@
   align-items: center;
 }
 
+.story-image {
+  display: flex;
+  flex-direction: column;
+  gap: 2vh;
+  align-items: center;
+  justify-content: center;
+}
+.visual-label {
+  text-transform: capitalize;
+}
 .story-text {
   margin: 0;
   font-size: 18px;

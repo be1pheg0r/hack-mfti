@@ -16,6 +16,7 @@ export type StoryStep = {
   id: string
   text: string
   visualLabel: string
+  // image: img
 }
 
 export type LessonStep = QuestionStep | StoryStep

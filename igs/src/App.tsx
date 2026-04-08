@@ -10,7 +10,7 @@ function App() {
   const [temporaryReaction, setTemporaryReaction] = useState<string | null>(null)
 
   const currentStep = LESSON_STEPS[stepIndex]
-  const progressPercent = ((stepIndex + 1) / LESSON_STEPS.length) * 100
+  const progressPercent = ((stepIndex) / LESSON_STEPS.length) * 100
 
   const selectedChoice = useMemo(() => {
     if (!currentStep || currentStep.kind !== 'question' || !selectedChoiceId) {
