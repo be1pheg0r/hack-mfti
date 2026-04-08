@@ -17,6 +17,51 @@
   margin-bottom: 2vh;
 }
 
+.progress-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.back-button {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  /* background: #f0f0f0; */
+  color: #2c2c2c;
+  background-color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* transition: all 0.2s ease; */
+  padding: 0;
+}
+
+.back-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.back-button:hover:enabled {
+  /* background: #e0e0e0; */
+  /* transform: translateX(-2px); */
+  /* transform: scale(1.5); */
+}
+
+.back-button:active:enabled {
+  transform: translateX(0px);
+}
+
+.back-button:disabled {
+  /* background: #f0f0f0; */
+  color: #cccccc;
+  cursor: not-allowed;
+}
+
 .progress-track {
   width: 100%;
   height: 8px;
