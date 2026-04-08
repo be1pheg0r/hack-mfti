@@ -19,7 +19,8 @@ function App() {
     return currentStep.choices.find((choice) => choice.id === selectedChoiceId) ?? null
   }, [currentStep, selectedChoiceId])
 
-  const isContinueDisabled = currentStep.kind === 'question' && !selectedChoice
+  const isContinueDisabled =
+    currentStep.kind === 'question' && !selectedChoice?.isCorrect
 
   const goToNextStep = () => {
     if (stepIndex >= LESSON_STEPS.length - 1) {
@@ -34,7 +35,7 @@ function App() {
   }
 
   const handleContinue = () => {
-    if (currentStep.kind === 'question' && !selectedChoice) {
+    if (currentStep.kind === 'question' && !selectedChoice?.isCorrect) {
       return
     }
     goToNextStep()

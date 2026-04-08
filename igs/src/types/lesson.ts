@@ -2,6 +2,8 @@ export type QuestionChoice = {
   id: string
   text: string
   reaction: string
+  isCorrect?: boolean
+  // image: img
 }
 
 export type QuestionStep = {
@@ -9,6 +11,7 @@ export type QuestionStep = {
   id: string
   question: string
   choices: QuestionChoice[]
+  // image: img
 }
 
 export type StoryStep = {
