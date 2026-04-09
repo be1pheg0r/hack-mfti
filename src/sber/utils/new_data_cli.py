@@ -239,9 +239,7 @@ def run(config: NewDataConfig) -> Path:
         ignore_index=True,
         sort=False,
     )
-    dedup_column: str = "prompt"
-    before_dedup: int = int(len(combined))
-    combined = combined.drop_duplicates(subset=[dedup_column], keep="first").reset_index(drop=True)
+    combined = combined.reset_index(drop=True)
 
     output_path: Path = Path(config.output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,7 +248,7 @@ def run(config: NewDataConfig) -> Path:
     logger.info("Новый train датасет сохранен: %s", output_path)
     logger.info("Позитивных сэмплов: %s", len(positives))
     logger.info("Негативных сэмплов: %s", len(negatives_features))
-    logger.info("Итог после drop_duplicates по %s: %s -> %s", dedup_column, before_dedup, len(combined))
+    logger.info("Итоговый размер train датасета: %s", len(combined))
     return output_path
 
 

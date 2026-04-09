@@ -8,7 +8,7 @@ import pandas as pd
 from src.sber.utils.new_data_cli import NewDataConfig, run
 
 
-def test_new_data_builds_combined_dataset_and_deduplicates_by_prompt(tmp_path: Path, monkeypatch: Any) -> None:
+def test_new_data_builds_combined_dataset_without_dedup_by_prompt(tmp_path: Path, monkeypatch: Any) -> None:
     source_csv: Path = tmp_path / "source.csv"
     output_csv: Path = tmp_path / "output.csv"
     datasets_yaml: Path = tmp_path / "datasets.yaml"
@@ -63,8 +63,9 @@ def test_new_data_builds_combined_dataset_and_deduplicates_by_prompt(tmp_path: P
     assert output_path == output_csv
     result: pd.DataFrame = pd.read_csv(output_csv)
 
-    # same_prompt присутствует и у positives, и у negatives, после dedup остается один.
-    assert sorted(result["prompt"].tolist()) == ["neg_prompt", "positive_only", "same_prompt"]
+    # same_prompt присутствует и у positives, и у negatives, дубликаты сохраняются.
+    assert sorted(result["prompt"].tolist()) == ["neg_prompt", "positive_only", "same_prompt", "same_prompt"]
+    assert len(result) == 4
     assert int(result["is_hallucination"].sum()) == 2
 
 
