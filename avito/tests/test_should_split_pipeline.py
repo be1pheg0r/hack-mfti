@@ -2,214 +2,231 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import joblib
-import pandas as pd
 import pytest
 
-from avito.features import (
-    ShouldSplitFeatureConfig,
-    append_embedding_features,
-    build_training_matrix,
-    extract_should_split_features,
-    resolve_keyphrases,
-)
-from avito.should_split.classifier import train_should_split_models
-from avito.should_split.inference import (
-    ShouldSplitArtifact,
-    load_should_split_artifact,
-    predict_should_split,
-    predict_should_split_from_artifact,
-)
+from avito.should_split.domain.catalog import MicrocategoryCatalog
+from avito.should_split.core.config import ShouldSplitGraphConfig
+from avito.should_split.domain.models import RetrievedExample, RunState
+from avito.should_split.core.node_names import GraphNodeNames, GraphRouteNames, StageNames
+from avito.should_split.core.pipeline import ShouldSplitPipeline, resolve_rag_markup_fpath
 
 
-class _FakeEncoder:
-    def encode(self, texts: list[str]) -> list[list[float]]:
-        return [[float(len(text)), float(idx)] for idx, text in enumerate(texts)]
+def _build_pipeline_stub(config: ShouldSplitGraphConfig) -> ShouldSplitPipeline:
+    pipeline = ShouldSplitPipeline.__new__(ShouldSplitPipeline)
+    pipeline.catalog = MicrocategoryCatalog(
+        mc_id_to_title={101: "Сантехника", 102: "Электрика"},
+        keyphrases_by_category={
+            101: ("сантехника", "трубы"),
+            102: ("электрика", "проводка"),
+        },
+        ordered_category_ids=[101, 102],
+    )
+    pipeline.config = config
+    pipeline.nodes = GraphNodeNames()
+    pipeline.routes = GraphRouteNames()
+    pipeline.stages = StageNames()
+    pipeline.mistral_caller = lambda *args, **kwargs: ""
+    return pipeline
 
 
-def _sample_df() -> pd.DataFrame:
-    rows = [
+def test_node_and_route_names_are_unique() -> None:
+    node_values = list(GraphNodeNames().__dict__.values())
+    route_values = list(GraphRouteNames().__dict__.values())
+
+    assert len(node_values) == len(set(node_values))
+    assert len(route_values) == len(set(route_values))
+
+
+def test_pre_filter_and_stage_timing_are_saved() -> None:
+    config = ShouldSplitGraphConfig.model_validate({"graph": {"verbose": False}})
+    pipeline = _build_pipeline_stub(config)
+
+    state = RunState(description="делаем сантехника и электрика")
+    state = pipeline.clean_node(state)
+    state = pipeline.pre_filter_node(state)
+
+    assert state.shouldSplit is True
+    assert state.multiCats is True
+    assert pipeline.stages.clean in state.stage_durations_sec
+    assert pipeline.stages.pre_filter in state.stage_durations_sec
+    assert state.stage_durations_sec[pipeline.stages.clean] >= 0.0
+    assert state.stage_durations_sec[pipeline.stages.pre_filter] >= 0.0
+
+
+def test_drafts_stub_writes_metadata() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {"graph": {"verbose": False, "draft_stub_mode": "metadata_only"}}
+    )
+    pipeline = _build_pipeline_stub(config)
+
+    state = RunState(description="пример")
+    state = pipeline.drafts_node(state)
+
+    assert state.metadata["drafts_status"] == "stub"
+    assert state.drafts == []
+
+
+def test_drafts_stub_can_raise_not_implemented() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {"graph": {"verbose": False, "draft_stub_mode": "raise"}}
+    )
+    pipeline = _build_pipeline_stub(config)
+
+    with pytest.raises(NotImplementedError):
+        pipeline.drafts_node(RunState(description="пример"))
+
+
+def test_drafts_generate_creates_texts() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
         {
-            "description": "Ремонт под ключ, включая материалы",
-            "sourceMcId": 1,
-            "sourceMcTitle": "Ремонт квартир и домов под ключ",
-            "caseType": "turnkey",
-            "shouldSplit": False,
-            "split": "train",
-        },
-        {
-            "description": "Электрика отдельно, также выполняем сантехнику",
-            "sourceMcId": 2,
-            "sourceMcTitle": "Электрика",
-            "caseType": "electric",
-            "shouldSplit": True,
-            "split": "train",
-        },
-        {
-            "description": "- плитка\n- покраска\nпомимо штукатурки",
-            "sourceMcId": 3,
-            "sourceMcTitle": "Отделочные работы",
-            "caseType": "finish",
-            "shouldSplit": True,
-            "split": "train",
-        },
-        {
-            "description": "Мелкий ремонт без доп. услуг",
-            "sourceMcId": 2,
-            "sourceMcTitle": "Электрика",
-            "caseType": "electric",
-            "shouldSplit": False,
-            "split": "train",
-        },
-        {
-            "description": "Отдельно делаем демонтаж",
-            "sourceMcId": 3,
-            "sourceMcTitle": "Отделочные работы",
-            "caseType": "finish",
-            "shouldSplit": True,
-            "split": "val",
-        },
-        {
-            "description": "Ремонт под ключ, в том числе доставка",
-            "sourceMcId": 1,
-            "sourceMcTitle": "Ремонт квартир и домов под ключ",
-            "caseType": "turnkey",
-            "shouldSplit": False,
-            "split": "val",
-        },
-        {
-            "description": "Также выполняем электрику и сантехнику",
-            "sourceMcId": 4,
-            "sourceMcTitle": "Сантехника",
-            "caseType": "plumbing",
-            "shouldSplit": True,
-            "split": "test",
-        },
-        {
-            "description": "Только сборка мебели",
-            "sourceMcId": 5,
-            "sourceMcTitle": "Сборка мебели",
-            "caseType": "furniture",
-            "shouldSplit": False,
-            "split": "test",
-        },
+            "graph": {"verbose": False, "draft_stub_mode": "generate"},
+            "mistral": {"enabled": True},
+            "drafts": {"enabled": True},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: "Делаем аккуратно и быстро, работаем отдельно по категории."
+
+    state = RunState(
+        description="оригинальный стиль объявления",
+        shouldSplit=True,
+        categorized_mc_ids=[101],
+    )
+    state = pipeline.drafts_node(state)
+
+    assert state.metadata["drafts_status"] == "generated"
+    assert len(state.drafts) == 1
+    assert state.drafts[0].mc_id == 101
+    assert state.drafts[0].text
+
+
+def test_categorize_node_parses_category_ids() -> None:
+    config = ShouldSplitGraphConfig.model_validate({"graph": {"verbose": False}})
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: "101, 999, 102"
+    pipeline._get_balanced_top_k = lambda *args, **kwargs: [
+        RetrievedExample(text="a", shouldSplit=True, categories=["Сантехника"]),
+        RetrievedExample(text="b", shouldSplit=False, categories=[]),
     ]
-    return pd.DataFrame(rows)
+
+    state = RunState(description="пример")
+    state = pipeline.categorize_node(state)
+
+    assert state.categorized_mc_ids == [101, 102]
+    assert state.metadata["categories"] == [101, 102]
+    assert pipeline.stages.categorize in state.stage_durations_sec
 
 
-def test_extract_should_split_features_counts_markers_and_bullets() -> None:
-    df = _sample_df().iloc[[1, 2]].copy()
-
-    features = extract_should_split_features(df)
-
-    assert int(features.iloc[0]["split_marker_count"]) >= 1
-    assert int(features.iloc[0]["complex_marker_count"]) == 0
-    assert int(features.iloc[1]["has_bullets"]) == 1
-    assert float(features.iloc[0]["marker_ratio"]) > 0
-    assert "max_keyphrase_rapidfuzz" in features.columns
-    assert "split_marker_near_keyphrase" in features.columns
-    assert features["case_type"].nunique() >= 1
-
-
-def test_append_embedding_features_adds_embedding_columns() -> None:
-    df = _sample_df().iloc[:3].copy()
-    base = extract_should_split_features(df)
-
-    keyphrases = resolve_keyphrases(df)
-    cfg = ShouldSplitFeatureConfig()
-    extended = append_embedding_features(
-        base,
-        descriptions=df["description"].tolist(),
-        encoder=_FakeEncoder(),
-        keyphrases=keyphrases,
-        config=cfg,
+def test_rag_router_uses_should_split_flag_for_categorize() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {"graph": {"verbose": False, "enable_categorization": True}}
     )
+    pipeline = _build_pipeline_stub(config)
 
-    assert "embedding_000" in extended.columns
-    assert "embedding_001" in extended.columns
-    assert "max_keyphrase_cosine_similarity" in extended.columns
-    assert "max_entailment_similarity" in extended.columns
-    assert len(extended) == len(base)
+    state = RunState(description="пример", shouldSplit=True)
+    assert pipeline.rag_router(state) == pipeline.routes.to_categorize
 
-
-def test_build_training_matrix_with_embeddings() -> None:
-    df = _sample_df().copy()
-
-    X, y, split = build_training_matrix(df, include_embeddings=True, encoder=_FakeEncoder())
-
-    assert len(X) == len(df)
-    assert y.dtype == bool
-    assert set(split.unique()) == {"train", "val", "test"}
-    assert "source_mc_id" in X.columns
-    assert "case_type" in X.columns
-    assert "embedding_000" in X.columns
+    state = RunState(description="пример", shouldSplit=False)
+    assert pipeline.rag_router(state) == pipeline.routes.to_llm_exit
 
 
-def test_train_should_split_models_smoke() -> None:
-    df = _sample_df().copy()
+def test_pre_filter_router_skips_llm_when_prefilter_true() -> None:
+    config = ShouldSplitGraphConfig.model_validate({"graph": {"verbose": False}})
+    pipeline = _build_pipeline_stub(config)
 
-    result = train_should_split_models(df=df, include_embeddings=False)
+    true_state = RunState(description="пример", pre_filter_verdict=True)
+    false_state = RunState(description="пример", pre_filter_verdict=False)
 
-    assert result.model_name in {
-        "logistic_regression",
-        "random_forest",
-        "hist_gradient_boosting",
-        "catboost",
-        "xgboost",
-        "lightgbm",
-    }
-    assert 0.0 <= result.gt_should_split_ratio <= 1.0
-    assert 0.0 <= result.model_should_split_ratio <= 1.0
-    assert abs(result.ratio_delta) == pytest.approx(result.ratio_abs_delta)
-    assert len(result.model_comparison_records) > 0
+    assert pipeline.pre_filter_router(true_state) == pipeline.routes.to_categorize
+    assert pipeline.pre_filter_router(false_state) == pipeline.routes.to_rag
 
 
-def test_predict_should_split_from_artifact_smoke(tmp_path: Path) -> None:
-    df = _sample_df().copy()
-    train_result = train_should_split_models(df=df, include_embeddings=False)
-
-    artifact_path = tmp_path / "should_split_artifact.joblib"
-    joblib.dump(
+def test_should_split_node_uses_no_rag_prompt_mode() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
         {
-            "best_model_name": train_result.model_name,
-            "pipeline": train_result.pipeline,
-            "with_embeddings": False,
-            "feature_config": {"include_extra_text_features": True},
-        },
-        artifact_path,
+            "mistral": {"enabled": True},
+            "graph": {"verbose": False, "use_rag": False},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: "True"
+    pipeline._get_balanced_top_k = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("retrieval не должен вызываться при use_rag=False")
     )
 
-    loaded_artifact = load_should_split_artifact(artifact_path)
-    assert loaded_artifact.best_model_name == train_result.model_name
+    state = RunState(description="пример", pre_filter_verdict=True)
+    state = pipeline.rag_split_node(state)
 
-    inference_result = predict_should_split_from_artifact(df=df.iloc[:3], artifact_path=artifact_path)
+    assert state.rag_split_verdict is True
+    assert state.multiCats is True
+    assert state.metadata["should_split_prompt_mode"] == "no_rag"
 
-    assert len(inference_result.predictions) == 3
-    assert inference_result.probabilities is None or len(inference_result.probabilities) == 3
 
-
-def test_predict_should_split_requires_encoder_for_embedding_artifact() -> None:
-    df = _sample_df().copy()
-    train_result = train_should_split_models(df=df, include_embeddings=False)
-
-    artifact = ShouldSplitArtifact(
-        best_model_name=train_result.model_name,
-        pipeline=train_result.pipeline,
-        with_embeddings=True,
-        feature_config={"include_extra_text_features": True},
+def test_categorize_node_uses_no_rag_prompt_mode() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {
+            "mistral": {"enabled": True},
+            "graph": {"verbose": False, "use_rag": False},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: "101, 102"
+    pipeline._get_balanced_top_k = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("retrieval не должен вызываться при use_rag=False")
     )
 
-    with pytest.raises(ValueError):
-        predict_should_split(df=df.iloc[:2], artifact=artifact)
+    state = RunState(description="пример")
+    state = pipeline.categorize_node(state)
+
+    assert state.categorized_mc_ids == [101, 102]
+    assert state.metadata["categorization_prompt_mode"] == "no_rag"
 
 
-def test_drop_correlated_features_when_threshold_set() -> None:
-    df = _sample_df().copy()
+def test_rag_router_routes_to_categorize_when_multi_cats_true_even_if_should_split_false() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {
+            "mistral": {"enabled": True},
+            "graph": {"verbose": False, "use_rag": False, "enable_categorization": True},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: '{"shouldSplit": false, "multiCats": true}'
 
-    # Дублируем числовой признак, чтобы получить корреляцию 1.0
-    df["duplicate_feature"] = df["sourceMcId"]
+    state = RunState(description="пример")
+    state = pipeline.rag_split_node(state)
 
-    cfg = ShouldSplitFeatureConfig(correlation_threshold=0.95)
-    X, _, _ = build_training_matrix(df, include_embeddings=False, config=cfg)
+    assert state.shouldSplit is False
+    assert state.multiCats is True
+    assert pipeline.rag_router(state) == pipeline.routes.to_categorize
 
-    assert "duplicate_feature" not in X.columns
+
+def test_resolve_rag_markup_fpath_uses_markup_filename_as_fallback() -> None:
+    data_dpath = Path("C:/repo/avito/data")
+
+    resolved = resolve_rag_markup_fpath(
+        data_dpath=data_dpath,
+        rag_markup_path=None,
+        markup_filename="rnc_dataset_markup.json",
+    )
+
+    assert resolved == data_dpath / "rnc_dataset_markup.json"
+
+
+def test_resolve_rag_markup_fpath_prefers_explicit_path() -> None:
+    data_dpath = Path("C:/repo/avito/data")
+
+    relative_resolved = resolve_rag_markup_fpath(
+        data_dpath=data_dpath,
+        rag_markup_path="custom/rag.json",
+        markup_filename="rnc_dataset_markup.json",
+    )
+    absolute_resolved = resolve_rag_markup_fpath(
+        data_dpath=data_dpath,
+        rag_markup_path="C:/tmp/rag.json",
+        markup_filename="rnc_dataset_markup.json",
+    )
+
+    assert relative_resolved == data_dpath / "custom/rag.json"
+    assert absolute_resolved == Path("C:/tmp/rag.json")
+
+

@@ -117,6 +117,28 @@ def get_avito_data_dpath() -> PathLike:
 
 
 @fixdir
+@avito
+def get_avito_gitignore_dpath() -> PathLike:
+    """Каталог служебных артефактов Авито, исключенных из git.
+
+    Returns:
+        Путь к avito/gitignore.
+    """
+    return Path() / "gitignore"
+
+
+@fixdir
+@avito
+def get_avito_gitignore_data_dpath() -> PathLike:
+    """Каталог служебных датасетов Авито, исключенных из git.
+
+    Returns:
+        Путь к avito/data/gitignore.
+    """
+    return Path() / "data" / "gitignore"
+
+
+@fixdir
 @sber
 def get_sber_data_dpath() -> PathLike:
     """Каталог данных кейса Сбер.

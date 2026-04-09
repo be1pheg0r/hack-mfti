@@ -1,5 +1,44 @@
-# common requirements
+# Unified project requirements (runtime + tooling)
 
+# Core
 colorama
 pyyaml
 pydantic
+
+# Data & classical ML runtime
+numpy>=1.26.0
+pandas
+scikit-learn>=1.5.0
+joblib
+tqdm>=4.66.0
+
+# Graph / retrieval runtime
+langgraph>=0.2.0
+langchain-community>=0.3.0
+langchain-huggingface>=0.1.0
+chromadb>=0.5.0
+
+# Transformer / embedding inference
+torch>=2.3.0
+transformers>=4.45.0
+sentence-transformers>=3.0.0
+accelerate>=0.34.0
+
+# API runtime
+fastapi>=0.115.0
+uvicorn>=0.30.0
+
+# SDK / integrations
+mistralai
+
+# UI
+gradio
+
+# Dev / notebooks
+pytest
+jupyter
+matplotlib
+seaborn
+umap-learn
+optuna>=4.0.0
+

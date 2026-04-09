@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hack-mfti"
+version = "0.1.0"
+description = "Avito case solution for IT Purple Hack 2026"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "colorama",
+    "pyyaml",
+    "pydantic",
+    "numpy>=1.26.0",
+    "pandas",
+    "scikit-learn>=1.5.0",
+    "joblib",
+    "tqdm>=4.66.0",
+    "langgraph>=0.2.0",
+    "langchain-community>=0.3.0",
+    "langchain-huggingface>=0.1.0",
+    "chromadb>=0.5.0",
+    "torch>=2.3.0",
+    "transformers>=4.45.0",
+    "sentence-transformers>=3.0.0",
+    "accelerate>=0.34.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "gradio",
+    "pytest",
+    "jupyter",
+    "matplotlib",
+    "seaborn",
+    "umap-learn",
+    "optuna>=4.0.0",
+    "mistralai",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["avito*", "common*"]
+namespaces = true
