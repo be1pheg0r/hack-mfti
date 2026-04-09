@@ -20,6 +20,20 @@
 | `--report-dir` | `str` | `None` | Каталог для отчета (если не задан, рядом с output). |
 | `--save-plots` / `--no-save-plots` | `bool` | `True` | Сохранять графики в отчете. |
 
+## [`scripts/full_evaluate.py`](../scripts/full_evaluate.py)
+Обертка над [`src/sber/utils/full_evaluate_cli.py`](../src/sber/utils/full_evaluate_cli.py).
+
+### Аргументы
+| Аргумент | Тип | По умолчанию | Описание |
+|---|---|---|---|
+| `--input-csv` | `str` | `data/bench/bench_processed_judged.csv` | Входной CSV с `query`/`prompt` и `model_answer`. |
+| `--output-csv` | `str` | `data/bench/bench_processed_judged_full_eval.csv` | Итоговый CSV с `predict_proba` и колонками пайплайна. |
+| `--checkpoint-dir` | `str` | `sber_tabular/latest` | Директория tabular-чекпоинта. |
+| `--feature-model-name` | `str` | `ai-sage/GigaChat3-10B-A1.8B-bf16` | LLM для feature extraction. |
+| `--feature-config-path` | `str` | [`configs/sber/hooks_config.yaml`](../configs/sber/hooks_config.yaml) | YAML-конфиг извлечения фичей. |
+| `--input-query-column` | `str` | `None` | Явное имя query-колонки (иначе auto: `query` -> `prompt`). |
+| `--threshold` | `float` | `None` | Override порога бинарной метки. |
+
 ## [`scripts/extract_features.py`](../scripts/extract_features.py)
 Обертка над [`src/sber/utils/extract_features_cli.py`](../src/sber/utils/extract_features_cli.py).
 
@@ -70,9 +84,6 @@
 | `--output-csv` | `str` | `data/bench/bench_processed_judged_mapped.csv` | CSV после маппинга. |
 | `--strict` / `--no-strict` | `bool` | `True` | Падать при несовпадении train/val фичей. |
 | `--inplace` / `--no-inplace` | `bool` | `False` | Перезаписывать `val_csv` вместо `output_csv`. |
-
-## [`scripts/train_tabular_hallucination.py`](../scripts/train_tabular_hallucination.py)
-Обертка над [`src/sber/utils/train_tabular_hallucination_cli.py`](../src/sber/utils/train_tabular_hallucination_cli.py).
 
 ### Аргументы
 | Аргумент | Тип | По умолчанию | Описание |
@@ -151,9 +162,11 @@
 ## Быстрые примеры
 ```bash
 python scripts/evaluate.py --help
+python scripts/full_evaluate.py --help
 python scripts/extract_features.py --help
 python scripts/generate_mistral_judged_dataset.py --help
 python scripts/map_bench_columns.py --help
+python scripts/new_data.py --help
 python scripts/train_tabular_hallucination.py --help
 python scripts/tabular_pipeline_server.py --help
 python scripts/init_servers.py --help
