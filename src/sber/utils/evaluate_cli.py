@@ -54,14 +54,14 @@ def parse_args() -> ScoreConfig:
         "--input_csv",
         dest="input_csv",
         type=str,
-        default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_mapped.csv"),
+        default=str(Path(get_data_bench_dpath()) / "bench_processed.csv"),
     )
     parser.add_argument(
         "--output-csv",
         "--output_csv",
         dest="output_csv",
         type=str,
-        default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_tabular_scores.csv"),
+        default=str(Path(get_data_bench_dpath()) / "bench_processed_scores.csv"),
     )
     parser.add_argument("--checkpoint-dir", "--checkpoint_dir", dest="checkpoint_dir", type=str, default="sber_tabular/latest")
     parser.add_argument("--threshold", type=float, default=None)
