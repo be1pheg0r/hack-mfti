@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+"""Скорит CSV с prompt/query + model_answer и дописывает predict_proba."""
+
+import argparse
+from pathlib import Path
+from typing import *
+
+import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from common.logger import SBER_EVALUATION_LOGGER as logger
+from common.paths import PathLike, get_data_raw_dpath
+from src.servers.utils.tabular_pipeline_utils import (
+    TabularPipelineRequest,
+    TabularPipelineServerConfig,
+    TabularPipelineService,
+)
+from src.sber.constants import DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH, DEFAULT_SBER_SCRIPT_MODEL_NAME
+
+
+class PredictCsvConfig(BaseModel):
+    """Конфигурация CSV-скоринга через tabular pipeline.
+
+    Attributes:
+        input_csv: Входной CSV с колонками prompt/query и model_answer.
+        output_csv: Выходной CSV с добавленной колонкой predict_proba.
+        checkpoint_dir: Директория tabular-чекпоинта.
+        feature_model_name: Имя/путь LLM модели для извлечения фичей.
+        feature_config_path: YAML-конфиг feature extractor.
+        feature_batch_size: Размер батча feature extractor.
+        input_query_column: Явная query-колонка (если не задана, auto: prompt -> query).
+        threshold: Опциональный override порога классификации.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    input_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / "predict_input.csv")
+    output_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / "predict_output.csv")
+    checkpoint_dir: PathLike = "sber_tabular/latest"
+    feature_model_name: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
+    feature_config_path: PathLike = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
+    feature_batch_size: int = 2
+    input_query_column: str | None = None
+    threshold: float | None = None
+
+    @field_validator("feature_batch_size")
+    @classmethod
+    def validate_feature_batch_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("feature_batch_size должен быть положительным")
+        return value
+
+    @field_validator("input_query_column")
+    @classmethod
+    def validate_input_query_column(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized: str = value.strip()
+        if not normalized:
+            raise ValueError("input_query_column не может быть пустым")
+        return normalized
+
+    @field_validator("threshold")
+    @classmethod
+    def validate_threshold(cls, value: float | None) -> float | None:
+        if value is None:
+            return value
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("threshold должен быть в диапазоне [0, 1]")
+        return value
+
+
+def parse_args() -> PredictCsvConfig:
+    """Парсит CLI-аргументы predict_csv скрипта."""
+    parser = argparse.ArgumentParser(description="Скоринг CSV через feature extractor + tabular classifier")
+    parser.add_argument("--input-csv", type=str, default=str(Path(get_data_raw_dpath()) / "predict_input.csv"))
+    parser.add_argument("--output-csv", type=str, default=str(Path(get_data_raw_dpath()) / "predict_output.csv"))
+    parser.add_argument("--checkpoint-dir", type=str, default="sber_tabular/latest")
+    parser.add_argument("--feature-model-name", type=str, default=DEFAULT_SBER_SCRIPT_MODEL_NAME)
+    parser.add_argument("--feature-config-path", type=str, default=str(DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH))
+    parser.add_argument("--feature-batch-size", type=int, default=2)
+    parser.add_argument("--input-query-column", type=str, default=None)
+    parser.add_argument("--threshold", type=float, default=None)
+    namespace: argparse.Namespace = parser.parse_args()
+    return PredictCsvConfig.model_validate(vars(namespace))
+
+
+def _resolve_query_column_name(columns: Sequence[str], preferred_column: str | None = None) -> str:
+    """Определяет колонку запроса во входном CSV."""
+    available: set[str] = {str(column) for column in columns}
+    if preferred_column is not None:
+        if preferred_column in available:
+            return preferred_column
+        raise ValueError(f"Колонка {preferred_column} не найдена во входном CSV")
+
+    for candidate in ("prompt", "query"):
+        if candidate in available:
+            return candidate
+    raise ValueError("Во входном CSV должна быть колонка prompt или query")
+
+
+def run(config: PredictCsvConfig) -> Path:
+    """Скорит CSV и сохраняет predict_proba."""
+    input_path: Path = Path(config.input_csv)
+    output_path: Path = Path(config.output_csv)
+
+    dataframe: pd.DataFrame = pd.read_csv(input_path)
+    query_column: str = _resolve_query_column_name(
+        columns=[str(column) for column in dataframe.columns],
+        preferred_column=config.input_query_column,
+    )
+    if "model_answer" not in dataframe.columns:
+        raise ValueError("Во входном CSV должна быть колонка model_answer")
+
+    queries: list[str] = dataframe[query_column].astype("string").fillna("").str.strip().tolist()
+    model_answers: list[str] = dataframe["model_answer"].astype("string").fillna("").str.strip().tolist()
+    if any(not query for query in queries):
+        raise ValueError(f"Во входном CSV найдены пустые значения в колонке {query_column}")
+    if any(not answer for answer in model_answers):
+        raise ValueError("Во входном CSV найдены пустые значения в колонке model_answer")
+
+    service_config: TabularPipelineServerConfig = TabularPipelineServerConfig(
+        serve_mode="tabular_pipeline",
+        feature_extractor_mode="real",
+        feature_model_name=config.feature_model_name,
+        checkpoint_dir=config.checkpoint_dir,
+        feature_config_path=config.feature_config_path,
+        feature_batch_size=config.feature_batch_size,
+    )
+    service: TabularPipelineService = TabularPipelineService(config=service_config)
+
+    response: dict[str, list[float] | list[int]] = service.predict(
+        TabularPipelineRequest(
+            queries=queries,
+            model_answers=model_answers,
+            threshold=config.threshold,
+        )
+    )
+
+    result: pd.DataFrame = dataframe.copy()
+    if "query" not in result.columns:
+        result["query"] = queries
+    result["predict_proba"] = [float(value) for value in response["hallucination_score"]]
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(output_path, index=False)
+
+    logger.info("predict_csv завершен: %s", output_path)
+    logger.info("Обработано сэмплов: %s", len(result))
+    return output_path
+
+
+def main() -> None:
+    """CLI entrypoint."""
+    run(parse_args())
+
+
+if __name__ == "__main__":
+    main()
+

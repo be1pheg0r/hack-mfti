@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-"""Full evaluation pipeline: query/model_answer -> features -> tabular score."""
+"""Оценивает модель как evaluate.py, но фичи извлекаются on-the-fly."""
 
 import argparse
+import math
 from pathlib import Path
 from typing import *
 
@@ -17,6 +18,7 @@ from src.servers.utils.tabular_pipeline_utils import (
     TabularPipelineService,
 )
 from src.sber.constants import DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH, DEFAULT_SBER_SCRIPT_MODEL_NAME
+from src.sber.utils.evaluate_utils import evaluate_scoring_results
 
 
 class FullEvaluateConfig(BaseModel):
@@ -24,25 +26,29 @@ class FullEvaluateConfig(BaseModel):
 
     Attributes:
         input_csv: Входной CSV с колонками query/prompt и model_answer.
-        output_csv: Выходной CSV с колонкой predict_proba.
+        output_csv: Выходной CSV со score-колонками.
         checkpoint_dir: Директория tabular-чекпоинта.
         feature_model_name: Имя/путь LLM модели для извлечения фичей.
         feature_config_path: YAML-конфиг feature extractor.
         feature_batch_size: Размер батча feature extractor.
         input_query_column: Явная query-колонка (если не задана, auto: query -> prompt).
         threshold: Опциональный override порога классификации.
+        report_dir: Каталог для текстового отчета и графиков.
+        save_plots: Сохранять ли графики оценки.
     """
 
     model_config = ConfigDict(frozen=True)
 
     input_csv: PathLike = Field(default_factory=lambda: Path(get_data_bench_dpath()) / "bench_processed_judged.csv")
-    output_csv: PathLike = Field(default_factory=lambda: Path(get_data_bench_dpath()) / "bench_processed_judged_full_eval.csv")
+    output_csv: PathLike = Field(default_factory=lambda: Path(get_data_bench_dpath()) / "bench_processed_judged_tabular_scores_full_eval.csv")
     checkpoint_dir: PathLike = "sber_tabular/latest"
     feature_model_name: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
     feature_config_path: PathLike = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
     feature_batch_size: int = 2
     input_query_column: str | None = None
     threshold: float | None = None
+    report_dir: PathLike | None = None
+    save_plots: bool = True
 
     @field_validator("feature_batch_size")
     @classmethod
@@ -78,7 +84,7 @@ def parse_args() -> FullEvaluateConfig:
     parser.add_argument(
         "--output-csv",
         type=str,
-        default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_full_eval.csv"),
+        default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_tabular_scores_full_eval.csv"),
     )
     parser.add_argument("--checkpoint-dir", type=str, default="sber_tabular/latest")
     parser.add_argument("--feature-model-name", type=str, default=DEFAULT_SBER_SCRIPT_MODEL_NAME)
@@ -86,6 +92,8 @@ def parse_args() -> FullEvaluateConfig:
     parser.add_argument("--feature-batch-size", type=int, default=2)
     parser.add_argument("--input-query-column", type=str, default=None)
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--report-dir", type=str, default=None)
+    parser.add_argument("--save-plots", action=argparse.BooleanOptionalAction, default=True)
     namespace: argparse.Namespace = parser.parse_args()
     return FullEvaluateConfig.model_validate(vars(namespace))
 
@@ -105,7 +113,7 @@ def _resolve_query_column_name(columns: Sequence[str], preferred_column: str | N
 
 
 def run(config: FullEvaluateConfig) -> Path:
-    """Запускает полный пайплайн и сохраняет predict_proba в CSV."""
+    """Скорит датасет с online feature extraction и сохраняет CSV/отчет."""
     input_path: Path = Path(config.input_csv)
     output_path: Path = Path(config.output_csv)
 
@@ -145,6 +153,7 @@ def run(config: FullEvaluateConfig) -> Path:
     result: pd.DataFrame = dataframe.copy()
     if "query" not in result.columns:
         result["query"] = queries
+    result["hallucination_score"] = [float(value) for value in response["hallucination_score"]]
     result["predict_proba"] = [float(value) for value in response["hallucination_score"]]
     result["pred_is_hallucination"] = [int(value) for value in response["pred_is_hallucination"]]
     result["entailment_score"] = [float(value) for value in response["entailment_score"]]
@@ -153,11 +162,24 @@ def run(config: FullEvaluateConfig) -> Path:
     result["t_total_sec"] = [float(value) for value in response["t_total_sec"]]
     result["t_sample_sec"] = [float(value) for value in response["t_sample_sec"]]
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(output_path, index=False)
+    total_batches: int = max(int(math.ceil(len(result) / max(config.feature_batch_size, 1))), 1)
+    export_dataframe: pd.DataFrame = result.assign(t_sample_ms=result["t_sample_sec"] * 1000.0)
 
-    logger.info("Full evaluate завершен: %s", output_path)
-    logger.info("Обработано сэмплов: %s", len(result))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    export_dataframe.to_csv(output_path, index=False)
+
+    report_dir: Path = Path(config.report_dir) if config.report_dir is not None else output_path.parent / "reports"
+    summary = evaluate_scoring_results(
+        dataframe=result,
+        output_csv_fpath=output_path,
+        report_dpath=report_dir,
+        save_plots_enabled=config.save_plots,
+        total_batches=total_batches,
+    )
+
+    logger.info("\n%s", summary.report_text)
+    logger.info("Сохранил отчет: %s", summary.report_fpath)
+    logger.info("Сохранил файл с предсказаниями: %s", output_path)
     return output_path
 
 

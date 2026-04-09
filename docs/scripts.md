@@ -27,13 +27,30 @@
 | Аргумент | Тип | По умолчанию | Описание |
 |---|---|---|---|
 | `--input-csv` | `str` | `data/bench/bench_processed_judged.csv` | Входной CSV с `query`/`prompt` и `model_answer`. |
-| `--output-csv` | `str` | `data/bench/bench_processed_judged_full_eval.csv` | Итоговый CSV с `predict_proba` и колонками пайплайна. |
+| `--output-csv` | `str` | `data/bench/bench_processed_judged_tabular_scores_full_eval.csv` | Итоговый CSV со score-колонками (`hallucination_score`, `predict_proba`, `pred_is_hallucination`) и таймингами. |
 | `--checkpoint-dir` | `str` | `sber_tabular/latest` | Директория tabular-чекпоинта. |
 | `--feature-model-name` | `str` | `ai-sage/GigaChat3-10B-A1.8B-bf16` | LLM для feature extraction. |
 | `--feature-config-path` | `str` | [`configs/sber/hooks_config.yaml`](../configs/sber/hooks_config.yaml) | YAML-конфиг извлечения фичей. |
 | `--feature-batch-size` | `int` | `2` | Размер батча feature extractor внутри tabular pipeline. |
 | `--input-query-column` | `str` | `None` | Явное имя query-колонки (иначе auto: `query` -> `prompt`). |
 | `--threshold` | `float` | `None` | Override порога бинарной метки. |
+| `--report-dir` | `str` | `None` | Каталог для текстового отчета и графиков. |
+| `--save-plots` / `--no-save-plots` | `bool` | `True` | Сохранять графики в отчете. |
+
+## [`scripts/predict_csv.py`](../scripts/predict_csv.py)
+Обертка над [`src/sber/utils/predict_csv_cli.py`](../src/sber/utils/predict_csv_cli.py).
+
+### Аргументы
+| Аргумент | Тип | По умолчанию | Описание |
+|---|---|---|---|
+| `--input-csv` | `str` | `data/raw/predict_input.csv` | Входной CSV с `prompt`/`query` и `model_answer`. |
+| `--output-csv` | `str` | `data/raw/predict_output.csv` | CSV с добавленной колонкой `predict_proba`. |
+| `--checkpoint-dir` | `str` | `sber_tabular/latest` | Директория tabular-чекпоинта. |
+| `--feature-model-name` | `str` | `ai-sage/GigaChat3-10B-A1.8B-bf16` | LLM для feature extraction. |
+| `--feature-config-path` | `str` | [`configs/sber/hooks_config.yaml`](../configs/sber/hooks_config.yaml) | YAML-конфиг извлечения фичей. |
+| `--feature-batch-size` | `int` | `2` | Размер батча feature extractor внутри tabular pipeline. |
+| `--input-query-column` | `str` | `None` | Явное имя query-колонки (`prompt`/`query`). |
+| `--threshold` | `float` | `None` | Override порога бинарной метки в pipeline. |
 
 ## [`scripts/extract_features.py`](../scripts/extract_features.py)
 Обертка над [`src/sber/utils/extract_features_cli.py`](../src/sber/utils/extract_features_cli.py).
@@ -165,6 +182,7 @@
 ```bash
 python scripts/evaluate.py --help
 python scripts/full_evaluate.py --help
+python scripts/predict_csv.py --help
 python scripts/extract_features.py --help
 python scripts/generate_mistral_judged_dataset.py --help
 python scripts/map_bench_columns.py --help
