@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from rapidfuzz import fuzz
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_selection import SelectFromModel
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -109,6 +110,71 @@ class OptunaTuningConfig(BaseModel):
         return value
 
 
+class AutoFeatureSelectionConfig(BaseModel):
+    """Конфигурация автоматического отбора признаков.
+
+    Attributes:
+        enabled: Включить автоматический отбор.
+        correlation_filter_enabled: Включить корреляционный фильтр.
+        feature_correlation_threshold: Порог |corr(f_i, f_j)| для поиска дублей.
+        target_correlation_threshold: Порог |corr(f, y)|, ниже которого признак считается слабым.
+        model_selection_enabled: Включить model-based отбор.
+        model_selection_method: Метод model-based отбора (`xgboost`/`select_from_model`).
+        selection_threshold: Порог SelectFromModel.
+        max_features: Максимум сохраняемых признаков (если поддерживается селектором).
+        xgboost_n_estimators: Число деревьев для XGBoost-селектора.
+        xgboost_max_depth: Глубина деревьев XGBoost-селектора.
+        xgboost_learning_rate: Learning rate XGBoost-селектора.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    correlation_filter_enabled: bool = True
+    feature_correlation_threshold: float = 0.95
+    target_correlation_threshold: float = 0.05
+
+    model_selection_enabled: bool = True
+    model_selection_method: str = "xgboost"
+    selection_threshold: str | float = "median"
+    max_features: int | None = None
+
+    xgboost_n_estimators: int = 200
+    xgboost_max_depth: int = 4
+    xgboost_learning_rate: float = 0.05
+
+    @field_validator("feature_correlation_threshold", "target_correlation_threshold")
+    @classmethod
+    def validate_unit_interval(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Correlation threshold must be in [0, 1]")
+        return value
+
+    @field_validator("model_selection_method")
+    @classmethod
+    def validate_selection_method(cls, value: str) -> str:
+        normalized: str = value.strip().lower()
+        if normalized not in {"xgboost", "select_from_model"}:
+            raise ValueError("model_selection_method must be one of: xgboost, select_from_model")
+        return normalized
+
+    @field_validator("max_features", "xgboost_n_estimators", "xgboost_max_depth")
+    @classmethod
+    def validate_positive_int(cls, value: int | None) -> int | None:
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("Integer parameter must be positive")
+        return value
+
+    @field_validator("xgboost_learning_rate")
+    @classmethod
+    def validate_positive_float(cls, value: float) -> float:
+        if value <= 0.0:
+            raise ValueError("Float parameter must be positive")
+        return value
+
+
 class TabularTrainConfig(BaseModel):
     """Конфиг обучения tabular-модели.
 
@@ -130,6 +196,7 @@ class TabularTrainConfig(BaseModel):
         feature_plot_batch_size: Размер батча графиков.
         feature_plot_dir: Директория для графиков.
         model_variants: Список вариантов архитектур для сравнения.
+        auto_feature_selection: Настройки автоматического отбора признаков.
         optuna: Настройки небольшого Optuna-подбора.
         ignore_warnings_during_training: Подавлять предупреждения во время fit.
         random_seed: Seed.
@@ -172,6 +239,7 @@ class TabularTrainConfig(BaseModel):
             ModelVariantConfig(name="logreg_base", architecture="logreg"),
         ]
     )
+    auto_feature_selection: AutoFeatureSelectionConfig = Field(default_factory=AutoFeatureSelectionConfig)
     optuna: OptunaTuningConfig = Field(default_factory=OptunaTuningConfig)
     ignore_warnings_during_training: bool = True
 
@@ -393,6 +461,145 @@ class TabularPreprocessor:
         self.selected_feature_names: list[str] = []
         self.selected_groups: list[str] = []
 
+    def _safe_abs_corr_with_target(self, feature: pd.Series, target: pd.Series) -> float:
+        feature_num = pd.to_numeric(feature, errors="coerce").fillna(0.0)
+        target_num = pd.to_numeric(target, errors="coerce").fillna(0.0)
+        if feature_num.nunique(dropna=False) <= 1:
+            return 0.0
+        corr = feature_num.corr(target_num)
+        if pd.isna(corr) or np.isinf(corr):
+            return 0.0
+        return float(abs(corr))
+
+    def _apply_correlation_filter(self, train_df: pd.DataFrame, feature_names: list[str]) -> list[str]:
+        cfg = self.config.auto_feature_selection
+        if not cfg.correlation_filter_enabled or len(feature_names) <= 1:
+            return feature_names
+
+        target = train_df[self.config.target_col]
+        features_df = train_df[feature_names].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        corr_matrix = features_df.corr().abs().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        target_corr: dict[str, float] = {
+            name: self._safe_abs_corr_with_target(features_df[name], target) for name in feature_names
+        }
+
+        to_drop: set[str] = set()
+        for index, first_name in enumerate(feature_names):
+            if first_name in to_drop:
+                continue
+            for second_name in feature_names[index + 1 :]:
+                if second_name in to_drop:
+                    continue
+                pair_corr: float = float(corr_matrix.at[first_name, second_name])
+                if pair_corr < cfg.feature_correlation_threshold:
+                    continue
+
+                first_target_corr: float = target_corr[first_name]
+                second_target_corr: float = target_corr[second_name]
+                if (
+                    first_target_corr <= cfg.target_correlation_threshold
+                    and second_target_corr <= cfg.target_correlation_threshold
+                ):
+                    if first_target_corr < second_target_corr:
+                        to_drop.add(first_name)
+                    elif second_target_corr < first_target_corr:
+                        to_drop.add(second_name)
+                    else:
+                        to_drop.add(max(first_name, second_name))
+
+        if not to_drop:
+            return feature_names
+
+        kept = [name for name in feature_names if name not in to_drop]
+        TRAIN_LOGGER.info(
+            "Correlation feature filter: drop=%s keep=%s",
+            len(to_drop),
+            len(kept),
+        )
+        return kept
+
+    def _build_model_selector(self) -> Any:
+        cfg = self.config.auto_feature_selection
+        if cfg.model_selection_method == "xgboost":
+            try:
+                import xgboost as xgb
+
+                return xgb.XGBClassifier(
+                    n_estimators=cfg.xgboost_n_estimators,
+                    max_depth=cfg.xgboost_max_depth,
+                    learning_rate=cfg.xgboost_learning_rate,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    random_state=self.config.random_seed,
+                    objective="binary:logistic",
+                    eval_metric="logloss",
+                )
+            except ImportError:
+                TRAIN_LOGGER.warning(
+                    "xgboost недоступен для auto feature selection, использую SelectFromModel(LogisticRegression)"
+                )
+
+        from sklearn.linear_model import LogisticRegression
+
+        return LogisticRegression(
+            penalty="l1",
+            solver="liblinear",
+            max_iter=3000,
+            class_weight="balanced",
+            random_state=self.config.random_seed,
+        )
+
+    def _apply_model_feature_selection(
+        self,
+        train_df: pd.DataFrame,
+        feature_names: list[str],
+    ) -> list[str]:
+        cfg = self.config.auto_feature_selection
+        if not cfg.model_selection_enabled or len(feature_names) <= 1:
+            return feature_names
+
+        x_train = train_df[feature_names].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        y_train = pd.to_numeric(train_df[self.config.target_col], errors="coerce").fillna(0).astype(int)
+
+        selector = SelectFromModel(
+            estimator=self._build_model_selector(),
+            threshold=cfg.selection_threshold,
+            max_features=cfg.max_features,
+        )
+        selector.fit(x_train, y_train)
+        support_mask: list[bool] = [bool(value) for value in selector.get_support()]
+        selected = [name for name, keep in zip(feature_names, support_mask) if keep]
+
+        if not selected:
+            TRAIN_LOGGER.warning("Model-based feature selection не выбрал ни одного признака, оставляю исходный набор")
+            return feature_names
+
+        TRAIN_LOGGER.info(
+            "Model-based feature selection: method=%s drop=%s keep=%s",
+            cfg.model_selection_method,
+            len(feature_names) - len(selected),
+            len(selected),
+        )
+        return selected
+
+    def _apply_auto_feature_selection(
+        self,
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        feature_names: list[str],
+    ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+        cfg = self.config.auto_feature_selection
+        if not cfg.enabled:
+            return train_df, val_df, feature_names
+
+        selected = self._apply_correlation_filter(train_df=train_df, feature_names=feature_names)
+        selected = self._apply_model_feature_selection(train_df=train_df, feature_names=selected)
+
+        if not selected:
+            raise ValueError("Auto feature selection removed all features")
+
+        return train_df, val_df, selected
+
     def _align_input_schema(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Нормализует вход: prompt->query и feature_* alias -> train names."""
         result: pd.DataFrame = dataframe.copy()
@@ -577,6 +784,12 @@ class TabularPreprocessor:
                 prepared_val[self.selected_feature_names].fillna(0.0)
             )
 
+        prepared_train, prepared_val, self.selected_feature_names = self._apply_auto_feature_selection(
+            train_df=prepared_train,
+            val_df=prepared_val,
+            feature_names=self.selected_feature_names,
+        )
+
         return prepared_train, prepared_val, self.selected_feature_names
 
     def transform(self, dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -700,7 +913,7 @@ class TabularHallucinationTrainer:
             return None
 
         TRAIN_LOGGER.info(
-            "Запускаю Optuna-подбор параметров для варианта '%s' по метрике ROC AUC. trials=%s",
+            "Запускаю Optuna-подбор параметров для варианта '%s' по метрике Average Precision. trials=%s",
             variant.name,
             self.config.optuna.n_trials,
         )
@@ -724,7 +937,7 @@ class TabularHallucinationTrainer:
             )
             scores = self._predict_scores(model=model, features_df=x_val)
             try:
-                return float(roc_auc_score(y_val, scores))
+                return float(average_precision_score(y_val, scores))
             except ValueError:
                 return 0.0
 
@@ -1092,19 +1305,18 @@ class TabularHallucinationTrainer:
             )
             if tuned_result is not None:
                 tuned_model, tuned_params, tuned_threshold, tuned_metrics = tuned_result
-                baseline_roc_auc: float = float(best_metrics.get("roc_auc", float("nan")))
                 tuned_roc_auc: float = float(tuned_metrics.get("roc_auc", float("nan")))
-                if (
-                    np.isnan(baseline_roc_auc)
-                    or (not np.isnan(tuned_roc_auc) and tuned_roc_auc >= baseline_roc_auc)
-                ):
+                baseline_ap: float = float(best_metrics.get("average_precision", float("nan")))
+                tuned_ap: float = float(tuned_metrics.get("average_precision", float("nan")))
+                if (not np.isnan(tuned_ap)) and (np.isnan(baseline_ap) or tuned_ap >= baseline_ap):
                     best_model = tuned_model
                     best_scores = self._predict_scores(model=tuned_model, features_df=x_val)
                     best_metrics = tuned_metrics
                     best_metrics["threshold"] = float(tuned_threshold)
                     best_variant_optuna_params = tuned_params
                     TRAIN_LOGGER.info(
-                        "Применены Optuna-параметры для лучшей модели. ROC_AUC=%.6f",
+                        "Применены Optuna-параметры для лучшей модели. AP=%.6f, ROC_AUC=%.6f",
+                        tuned_ap,
                         tuned_roc_auc,
                     )
 
@@ -1225,6 +1437,7 @@ class TabularHallucinationPredictor:
 
 
 __all__ = [
+    "AutoFeatureSelectionConfig",
     "FeatureGroupFlags",
     "ModelVariantConfig",
     "TabularHallucinationPredictor",

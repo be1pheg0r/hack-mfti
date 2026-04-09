@@ -13,12 +13,12 @@ tabular_hallucination_train:
     entropy_drops: true
     moe_routing: true
     text_features: true
-    tfidf: false
+    tfidf: true
 
   pca_n_components: 128
   tfidf_max_features: 1000
   tfidf_n_components: 64
-  scaling: false
+  scaling: true
   under_sampling: true
   oversampling: false
   bad_features: []
@@ -45,9 +45,22 @@ tabular_hallucination_train:
       enabled: true
       params: {}
 
+  auto_feature_selection:
+    enabled: true
+    correlation_filter_enabled: true
+    feature_correlation_threshold: 0.95
+    target_correlation_threshold: 0.03
+    model_selection_enabled: true
+    model_selection_method: "xgboost"
+    selection_threshold: "median"
+    max_features: null
+    xgboost_n_estimators: 200
+    xgboost_max_depth: 4
+    xgboost_learning_rate: 0.05
+
   optuna:
     enabled: true
-    n_trials: 15
+    n_trials: 100
 
     timeout_sec: 600
 

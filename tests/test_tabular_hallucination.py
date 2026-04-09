@@ -6,6 +6,7 @@ from typing import *
 import pandas as pd
 
 from src.sber.models.tabular_hallucination import (
+    AutoFeatureSelectionConfig,
     FeatureGroupFlags,
     TabularHallucinationPredictor,
     TabularPreprocessor,
@@ -120,5 +121,90 @@ def test_preprocessor_accepts_prompt_and_feature_alias_columns() -> None:
     assert "mean_log_prob" in processed_train.columns
     assert "mean_log_prob" in processed_val.columns
     assert selected == ["mean_log_prob"]
+
+
+def test_auto_feature_selection_drops_correlated_weak_features() -> None:
+    train_df = pd.DataFrame(
+        {
+            "query": [f"q{i}" for i in range(40)],
+            "model_answer": [f"a{i}" for i in range(40)],
+            "is_hallucination": [i % 2 for i in range(40)],
+            "mean_log_prob": [float(i % 10) for i in range(40)],
+            "min_log_prob": [float(i % 10) + 1e-6 for i in range(40)],
+            "max_log_prob": [float(i % 2) for i in range(40)],
+        }
+    )
+    val_df = train_df.copy()
+
+    config = TabularTrainConfig(
+        train_csv="unused.csv",
+        val_csv="unused.csv",
+        feature_flags=FeatureGroupFlags(
+            uncertainty=True,
+            internal_scalars=False,
+            probe_vec=False,
+            attention_entropy=False,
+            entropy_drops=False,
+            moe_routing=False,
+            text_features=False,
+            tfidf=False,
+        ),
+        auto_feature_selection=AutoFeatureSelectionConfig(
+            enabled=True,
+            correlation_filter_enabled=True,
+            feature_correlation_threshold=0.9,
+            target_correlation_threshold=0.2,
+            model_selection_enabled=False,
+        ),
+        pca_n_components=None,
+        tfidf_n_components=None,
+        under_sampling=False,
+        oversampling=False,
+        plot_feature_distributions=False,
+    )
+
+    preprocessor = TabularPreprocessor(config=config)
+    _, _, selected = preprocessor.fit_transform(train_df, val_df)
+
+    assert not ({"mean_log_prob", "min_log_prob"} <= set(selected))
+    assert "max_log_prob" in selected
+
+
+def test_auto_feature_selection_select_from_model_keeps_non_empty_features() -> None:
+    train_df = _build_dataset(30)
+    val_df = _build_dataset(10)
+
+    config = TabularTrainConfig(
+        train_csv="unused.csv",
+        val_csv="unused.csv",
+        feature_flags=FeatureGroupFlags(
+            uncertainty=True,
+            internal_scalars=False,
+            probe_vec=False,
+            attention_entropy=False,
+            entropy_drops=False,
+            moe_routing=False,
+            text_features=False,
+            tfidf=False,
+        ),
+        auto_feature_selection=AutoFeatureSelectionConfig(
+            enabled=True,
+            correlation_filter_enabled=False,
+            model_selection_enabled=True,
+            model_selection_method="select_from_model",
+            selection_threshold="median",
+        ),
+        pca_n_components=None,
+        tfidf_n_components=None,
+        under_sampling=False,
+        oversampling=False,
+        plot_feature_distributions=False,
+    )
+
+    preprocessor = TabularPreprocessor(config=config)
+    _, _, selected = preprocessor.fit_transform(train_df, val_df)
+
+    assert selected
+    assert set(selected).issubset({"mean_log_prob"})
 
 
