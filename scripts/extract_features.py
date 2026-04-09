@@ -5,7 +5,6 @@ from src.sber.utils.extract_features_cli import (
     _build_feature_column_names,
     _flatten_feature_groups,
     _sample_balanced_queries_and_answers,
-    _sample_temperature,
     main,
 )
 

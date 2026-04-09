@@ -30,11 +30,6 @@
 | `--seed` | `int` | `42` | Seed для shuffle и sampling. |
 | `--model-name` | `str` | `ai-sage/GigaChat3-10B-A1.8B-bf16` | HF-модель для извлечения фичей. |
 | `--batch-size` | `int` | `2` | Размер батча обработки пар `query + answer`. |
-| `--max-new-tokens` | `int` | `64` | Legacy-аргумент (сохранен для обратной совместимости, в новом пайплайне не используется). |
-| `--temperature-mean` | `float` | `1.0` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
-| `--temperature-std` | `float` | `0.2` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
-| `--temperature-min` | `float` | `0.3` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
-| `--temperature-max` | `float` | `1.7` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
 | `--output-csv` | `str` | `data/raw/model_features.csv` | Путь до итогового CSV. |
 | `--force-download` | `flag` | `False` | Принудительно перекачать датасеты. |
 | `--input-csv-path` | `str` | `None` | Входной CSV; если задан, YAML-датасеты не используются. |

@@ -19,11 +19,6 @@ from src.sber.constants import (
     DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH,
     DEFAULT_HALLUCINATION_SCORE_THRESHOLD,
     DEFAULT_SBER_SCRIPT_BATCH_SIZE,
-    DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX,
-    DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN,
-    DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN,
-    DEFAULT_SBER_SCRIPT_TEMPERATURE_STD,
-    DEFAULT_SBER_SCRIPT_MAX_NEW_TOKENS,
     DEFAULT_SBER_SCRIPT_MODEL_NAME,
     DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME,
     DEFAULT_SBER_SCRIPT_SEED,
@@ -42,11 +37,6 @@ class ScriptConfig(BaseModel):
         seed: Seed для воспроизводимого перемешивания.
         model_name: Hugging Face имя модели.
         batch_size: Размер батча для обработки пар вопрос-ответ.
-        max_new_tokens: Legacy-параметр (сохранен для обратной совместимости CLI).
-        temperature_mean: Legacy-параметр (сохранен для обратной совместимости CLI).
-        temperature_std: Legacy-параметр (сохранен для обратной совместимости CLI).
-        temperature_min: Legacy-параметр (сохранен для обратной совместимости CLI).
-        temperature_max: Legacy-параметр (сохранен для обратной совместимости CLI).
         output_csv: Путь к итоговому CSV с фичами.
         force_download: Принудительная перезагрузка датасетов.
         input_csv_path: Опциональный путь к входному CSV с колонкой `query` или `prompt`.
@@ -62,11 +52,6 @@ class ScriptConfig(BaseModel):
     seed: int = DEFAULT_SBER_SCRIPT_SEED
     model_name: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
     batch_size: int = DEFAULT_SBER_SCRIPT_BATCH_SIZE
-    max_new_tokens: int = DEFAULT_SBER_SCRIPT_MAX_NEW_TOKENS
-    temperature_mean: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN
-    temperature_std: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_STD
-    temperature_min: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN
-    temperature_max: float = DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX
     output_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / DEFAULT_SBER_SCRIPT_OUTPUT_FILENAME)
     force_download: bool = False
     input_csv_path: PathLike | None = None
@@ -75,7 +60,7 @@ class ScriptConfig(BaseModel):
     datasets_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "datasets_configs.yaml")
     feature_config_path: PathLike | None = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
 
-    @field_validator("batch_size", "max_new_tokens")
+    @field_validator("batch_size")
     @classmethod
     def validate_positive_int(cls, value: int) -> int:
         """Проверяет, что числовые параметры положительные."""
@@ -111,30 +96,12 @@ class ScriptConfig(BaseModel):
             raise ValueError("model_name не может быть пустым")
         return normalized
 
-    @field_validator("temperature_mean", "temperature_min", "temperature_max")
-    @classmethod
-    def validate_positive_float(cls, value: float) -> float:
-        """Проверяет, что параметры температуры больше нуля."""
-        if value <= 0.0:
-            raise ValueError("Параметры температуры должны быть больше нуля")
-        return value
-
-    @field_validator("temperature_std")
-    @classmethod
-    def validate_non_negative_std(cls, value: float) -> float:
-        """Проверяет, что std температуры неотрицательна."""
-        if value < 0.0:
-            raise ValueError("temperature_std не может быть отрицательной")
-        return value
-
     @model_validator(mode="after")
     def validate_output_suffix(self) -> ScriptConfig:
         """Проверяет расширение файла вывода."""
         output_path: Path = Path(self.output_csv)
         if output_path.suffix.lower() != ".csv":
             raise ValueError("output_csv должен указывать на .csv файл")
-        if self.temperature_min > self.temperature_max:
-            raise ValueError("temperature_min не может быть больше temperature_max")
         return self
 
 
@@ -149,32 +116,7 @@ def parse_args() -> ScriptConfig:
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SBER_SCRIPT_SEED, help="Seed для shuffle")
     parser.add_argument("--model-name", type=str, default=DEFAULT_SBER_SCRIPT_MODEL_NAME, help="Имя модели на Hugging Face")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_SBER_SCRIPT_BATCH_SIZE, help="Размер батча для генерации")
-    parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_SBER_SCRIPT_MAX_NEW_TOKENS, help="Максимум новых токенов")
-    parser.add_argument(
-        "--temperature-mean",
-        type=float,
-        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_MEAN,
-        help="Средняя температура генерации (normal distribution)",
-    )
-    parser.add_argument(
-        "--temperature-std",
-        type=float,
-        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_STD,
-        help="Std температуры генерации (normal distribution)",
-    )
-    parser.add_argument(
-        "--temperature-min",
-        type=float,
-        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_MIN,
-        help="Минимальная температура после clipping",
-    )
-    parser.add_argument(
-        "--temperature-max",
-        type=float,
-        default=DEFAULT_SBER_SCRIPT_TEMPERATURE_MAX,
-        help="Максимальная температура после clipping",
-    )
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_SBER_SCRIPT_BATCH_SIZE, help="Размер батча для обработки пар query+answer")
     parser.add_argument(
         "--output-csv",
         type=str,
@@ -395,18 +337,6 @@ def _feature_row_from_groups(features: FeatureGroups, *, probe_layers: Sequence[
     if len(feature_names) != len(feature_values):
         raise ValueError("Количество имен фичей не совпадает с количеством значений")
     return feature_names, feature_values
-
-
-def _sample_temperature(
-    rng: random.Random,
-    mean: float,
-    std: float,
-    min_value: float,
-    max_value: float,
-) -> float:
-    """Сэмплирует температуру из нормального распределения и ограничивает диапазон."""
-    sampled: float = mean if std == 0.0 else rng.normalvariate(mean, std)
-    return max(min_value, min(max_value, sampled))
 
 
 def _extract_logits(model_output: Any) -> torch.Tensor:
@@ -708,7 +638,6 @@ def _extract_rows_for_samples(
                             "sample_id": sample_counter,
                             "query": query,
                             "model_answer": model_answer,
-                            "temperature": None,
                         }
                     )
 
