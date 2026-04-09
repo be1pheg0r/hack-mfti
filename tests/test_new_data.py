@@ -11,6 +11,8 @@ from src.sber.utils.new_data_cli import NewDataConfig, run
 def test_new_data_builds_combined_dataset_and_deduplicates_by_prompt(tmp_path: Path, monkeypatch: Any) -> None:
     source_csv: Path = tmp_path / "source.csv"
     output_csv: Path = tmp_path / "output.csv"
+    datasets_yaml: Path = tmp_path / "datasets.yaml"
+    datasets_yaml.write_text("datasets:\n  dataset_names: ['rubq-20']\n", encoding="utf-8")
 
     pd.DataFrame(
         {
@@ -53,7 +55,7 @@ def test_new_data_builds_combined_dataset_and_deduplicates_by_prompt(tmp_path: P
         NewDataConfig(
             source_csv=source_csv,
             output_csv=output_csv,
-            datasets_config_path=tmp_path / "datasets.yaml",
+            datasets_config_path=datasets_yaml,
             feature_config_path=tmp_path / "hooks.yaml",
         )
     )
@@ -69,6 +71,8 @@ def test_new_data_builds_combined_dataset_and_deduplicates_by_prompt(tmp_path: P
 def test_new_data_supports_legacy_target_typo_column(tmp_path: Path, monkeypatch: Any) -> None:
     source_csv: Path = tmp_path / "source_typo.csv"
     output_csv: Path = tmp_path / "output_typo.csv"
+    datasets_yaml: Path = tmp_path / "datasets.yaml"
+    datasets_yaml.write_text("datasets:\n  dataset_names: ['rubq-20']\n", encoding="utf-8")
 
     pd.DataFrame(
         {
@@ -101,7 +105,7 @@ def test_new_data_supports_legacy_target_typo_column(tmp_path: Path, monkeypatch
         NewDataConfig(
             source_csv=source_csv,
             output_csv=output_csv,
-            datasets_config_path=tmp_path / "datasets.yaml",
+            datasets_config_path=datasets_yaml,
             feature_config_path=tmp_path / "hooks.yaml",
         )
     )

@@ -166,7 +166,6 @@ python scripts/full_evaluate.py --help
 python scripts/extract_features.py --help
 python scripts/generate_mistral_judged_dataset.py --help
 python scripts/map_bench_columns.py --help
-python scripts/new_data.py --help
 python scripts/train_tabular_hallucination.py --help
 python scripts/tabular_pipeline_server.py --help
 python scripts/init_servers.py --help
