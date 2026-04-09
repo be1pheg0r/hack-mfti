@@ -773,6 +773,12 @@ class TabularPreprocessor:
             prepared_val = self._append_matrix_columns(prepared_val, val_tfidf, tfidf_pca_names)
             self.selected_feature_names = [name for name in self.selected_feature_names if name not in tfidf_cols] + tfidf_pca_names
 
+        prepared_train, prepared_val, self.selected_feature_names = self._apply_auto_feature_selection(
+            train_df=prepared_train,
+            val_df=prepared_val,
+            feature_names=self.selected_feature_names,
+        )
+
         if self.config.scaling:
             from sklearn.preprocessing import StandardScaler
 
@@ -784,11 +790,6 @@ class TabularPreprocessor:
                 prepared_val[self.selected_feature_names].fillna(0.0)
             )
 
-        prepared_train, prepared_val, self.selected_feature_names = self._apply_auto_feature_selection(
-            train_df=prepared_train,
-            val_df=prepared_val,
-            feature_names=self.selected_feature_names,
-        )
 
         return prepared_train, prepared_val, self.selected_feature_names
 
@@ -819,7 +820,26 @@ class TabularPreprocessor:
             raise ValueError(f"Missing features for inference: {missing[:10]}")
 
         if self.scaler is not None:
-            prepared[self.selected_feature_names] = self.scaler.transform(prepared[self.selected_feature_names].fillna(0.0))
+            scale_features: list[str] = list(self.selected_feature_names)
+            scaler_fit_features: list[str] | None = None
+            if hasattr(self.scaler, "feature_names_in_"):
+                scaler_fit_features = [str(value) for value in self.scaler.feature_names_in_.tolist()]
+
+            if scaler_fit_features is not None and scaler_fit_features != scale_features:
+                # Backward-compatibility: старые checkpoint могли сохранить scaler до feature-selection.
+                aligned_for_scaler = prepared.reindex(columns=scaler_fit_features, fill_value=0.0).fillna(0.0)
+                scaled_all = self.scaler.transform(aligned_for_scaler)
+                scaled_df = pd.DataFrame(scaled_all, columns=scaler_fit_features, index=prepared.index)
+                for feature_name in scale_features:
+                    if feature_name in scaled_df.columns:
+                        prepared[feature_name] = scaled_df[feature_name]
+                TRAIN_LOGGER.warning(
+                    "Scaler feature set differs from selected features. Applied compatibility alignment: fit=%s selected=%s",
+                    len(scaler_fit_features),
+                    len(scale_features),
+                )
+            else:
+                prepared[scale_features] = self.scaler.transform(prepared[scale_features].fillna(0.0))
 
         return prepared
 

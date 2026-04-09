@@ -49,12 +49,24 @@ class ScoreConfig(BaseModel):
 def parse_args() -> ScoreConfig:
     """Парсит CLI-аргументы."""
     parser = argparse.ArgumentParser(description="Оценка tabular-модели на benchmark CSV")
-    parser.add_argument("--input-csv", type=str, default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_mapped.csv"))
-    parser.add_argument("--output-csv", type=str, default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_tabular_scores.csv"))
-    parser.add_argument("--checkpoint-dir", type=str, default="sber_tabular/latest")
+    parser.add_argument(
+        "--input-csv",
+        "--input_csv",
+        dest="input_csv",
+        type=str,
+        default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_mapped.csv"),
+    )
+    parser.add_argument(
+        "--output-csv",
+        "--output_csv",
+        dest="output_csv",
+        type=str,
+        default=str(Path(get_data_bench_dpath()) / "bench_processed_judged_tabular_scores.csv"),
+    )
+    parser.add_argument("--checkpoint-dir", "--checkpoint_dir", dest="checkpoint_dir", type=str, default="sber_tabular/latest")
     parser.add_argument("--threshold", type=float, default=None)
-    parser.add_argument("--report-dir", type=str, default=None)
-    parser.add_argument("--save-plots", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--report-dir", "--report_dir", dest="report_dir", type=str, default=None)
+    parser.add_argument("--save-plots", "--save_plots", dest="save_plots", action=argparse.BooleanOptionalAction, default=True)
     namespace: argparse.Namespace = parser.parse_args()
     return ScoreConfig.model_validate(vars(namespace))
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import *
 
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 from src.sber.models.tabular_hallucination import (
     AutoFeatureSelectionConfig,
@@ -206,5 +207,93 @@ def test_auto_feature_selection_select_from_model_keeps_non_empty_features() -> 
 
     assert selected
     assert set(selected).issubset({"mean_log_prob"})
+
+
+def test_preprocessor_scaling_with_auto_feature_selection_has_consistent_scaler_features() -> None:
+    train_df = pd.DataFrame(
+        {
+            "query": [f"q{i}" for i in range(30)],
+            "model_answer": [f"a{i}" for i in range(30)],
+            "is_hallucination": [i % 2 for i in range(30)],
+            "mean_log_prob": [float(i) for i in range(30)],
+            "min_log_prob": [float(i) + 1e-6 for i in range(30)],
+        }
+    )
+    val_df = train_df.copy()
+
+    config = TabularTrainConfig(
+        train_csv="unused.csv",
+        val_csv="unused.csv",
+        feature_flags=FeatureGroupFlags(
+            uncertainty=True,
+            internal_scalars=False,
+            probe_vec=False,
+            attention_entropy=False,
+            entropy_drops=False,
+            moe_routing=False,
+            text_features=False,
+            tfidf=False,
+        ),
+        scaling=True,
+        auto_feature_selection=AutoFeatureSelectionConfig(
+            enabled=True,
+            correlation_filter_enabled=True,
+            feature_correlation_threshold=0.9,
+            target_correlation_threshold=0.2,
+            model_selection_enabled=False,
+        ),
+        pca_n_components=None,
+        tfidf_n_components=None,
+        under_sampling=False,
+        oversampling=False,
+        plot_feature_distributions=False,
+    )
+
+    preprocessor = TabularPreprocessor(config=config)
+    preprocessor.fit_transform(train_df, val_df)
+    transformed = preprocessor.transform(val_df)
+
+    assert all(name in transformed.columns for name in preprocessor.selected_feature_names)
+
+
+def test_preprocessor_transform_is_backward_compatible_when_scaler_has_extra_fit_features() -> None:
+    train_df = pd.DataFrame(
+        {
+            "query": ["q1", "q2", "q3", "q4"],
+            "model_answer": ["a1", "a2", "a3", "a4"],
+            "is_hallucination": [1, 0, 1, 0],
+            "mean_log_prob": [0.1, 0.2, 0.3, 0.4],
+            "max_log_prob": [0.0, 1.0, 0.0, 1.0],
+        }
+    )
+
+    config = TabularTrainConfig(
+        train_csv="unused.csv",
+        val_csv="unused.csv",
+        feature_flags=FeatureGroupFlags(
+            uncertainty=True,
+            internal_scalars=False,
+            probe_vec=False,
+            attention_entropy=False,
+            entropy_drops=False,
+            moe_routing=False,
+            text_features=False,
+            tfidf=False,
+        ),
+        scaling=False,
+        pca_n_components=None,
+        tfidf_n_components=None,
+        under_sampling=False,
+        oversampling=False,
+        plot_feature_distributions=False,
+    )
+
+    preprocessor = TabularPreprocessor(config=config)
+    preprocessor.selected_feature_names = ["mean_log_prob"]
+    preprocessor.scaler = StandardScaler().fit(train_df[["mean_log_prob", "max_log_prob"]])
+
+    transformed = preprocessor.transform(train_df)
+
+    assert "mean_log_prob" in transformed.columns
 
 
