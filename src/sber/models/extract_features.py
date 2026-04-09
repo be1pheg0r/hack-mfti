@@ -394,6 +394,7 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
         self,
         answer_start: int,
         seq_len: int,
+        hidden_batch_index: int = 0,
     ) -> tuple[list[float], list[float], list[float]]:
         """Считает internal-скаляры, probe-вектор и entropy drops."""
         internal_scalars: list[float] = []
@@ -412,7 +413,7 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
                 logit_lens_entropies.append(0.0)
                 continue
 
-            hidden_states: torch.Tensor = hidden_states_raw[0]
+            hidden_states: torch.Tensor = hidden_states_raw[hidden_batch_index]
             answer_hidden: torch.Tensor = hidden_states[answer_start:seq_len]
             if answer_hidden.numel() == 0:
                 logger.debug("Слой %s вернул пустой slice ответа, подставляю нули", layer_idx)
@@ -446,7 +447,7 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
 
         return internal_scalars, pooled_probe.tolist(), entropy_drops
 
-    def _compute_attention_features(self, answer_start: int, seq_len: int) -> list[float]:
+    def _compute_attention_features(self, answer_start: int, seq_len: int, hidden_batch_index: int = 0) -> list[float]:
         """Считает attention entropy фичи по probe-слоям."""
         if not self.config.enable_attention_entropy:
             return []
@@ -461,9 +462,12 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
 
             attention_tensor: torch.Tensor = attention_tensor_raw.float()
             if attention_tensor.ndim == 4:
-                selected_attention: torch.Tensor = attention_tensor[0]
+                selected_attention: torch.Tensor = attention_tensor[hidden_batch_index]
             elif attention_tensor.ndim == 3:
-                selected_attention = attention_tensor
+                if hidden_batch_index < int(attention_tensor.shape[0]):
+                    selected_attention = attention_tensor[hidden_batch_index]
+                else:
+                    selected_attention = attention_tensor
             elif attention_tensor.ndim == 2:
                 selected_attention = attention_tensor.unsqueeze(0)
             else:
@@ -499,12 +503,13 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
         routing_tensor: torch.Tensor,
         answer_start: int,
         seq_len: int,
+        hidden_batch_index: int = 0,
     ) -> torch.Tensor | None:
         """Приводит routing tensor к виду, удобному для анализа токенов ответа."""
         if routing_tensor.ndim == 3:
-            if routing_tensor.shape[0] <= 0:
+            if routing_tensor.shape[0] <= hidden_batch_index:
                 return None
-            return routing_tensor[0, answer_start:seq_len, :]
+            return routing_tensor[hidden_batch_index, answer_start:seq_len, :]
 
         if routing_tensor.ndim == 2:
             return routing_tensor[answer_start:seq_len, :]
@@ -519,7 +524,7 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
 
         return None
 
-    def _compute_moe_features(self, answer_start: int, seq_len: int) -> list[float]:
+    def _compute_moe_features(self, answer_start: int, seq_len: int, hidden_batch_index: int = 0) -> list[float]:
         """Считает агрегированные routing-фичи для MoE-моделей."""
         if not self.config.enable_moe_routing:
             return []
@@ -541,6 +546,7 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
                 routing_tensor=routing_tensor,
                 answer_start=answer_start,
                 seq_len=seq_len,
+                hidden_batch_index=hidden_batch_index,
             )
             if routing_answer is None or routing_answer.numel() == 0:
                 continue
@@ -591,6 +597,8 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
         logits: torch.Tensor,
         input_ids: torch.Tensor,
         answer_start: int,
+        hidden_batch_index: int = 0,
+        clear_hidden: bool = True,
     ) -> FeatureGroups:
         """Извлекает полный набор фичей из результатов forward pass."""
         validated_input: FeatureExtractorInput = FeatureExtractorInput(
@@ -609,14 +617,17 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
             internal_scalars, probe_vector, entropy_drops = self._compute_internal_and_probe(
                 answer_start=validated_input.answer_start,
                 seq_len=seq_len,
+                hidden_batch_index=hidden_batch_index,
             )
             attention_features: list[float] = self._compute_attention_features(
                 answer_start=validated_input.answer_start,
                 seq_len=seq_len,
+                hidden_batch_index=hidden_batch_index,
             )
             moe_features: list[float] = self._compute_moe_features(
                 answer_start=validated_input.answer_start,
                 seq_len=seq_len,
+                hidden_batch_index=hidden_batch_index,
             )
             return FeatureGroups(
                 uncertainty=uncertainty_features,
@@ -627,7 +638,8 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
                 moe_routing=moe_features,
             )
         finally:
-            self._hidden.clear()
+            if clear_hidden:
+                self._hidden.clear()
 
 
 class DummyFeatureModelConfig(BaseModel):

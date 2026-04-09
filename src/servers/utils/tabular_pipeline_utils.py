@@ -222,6 +222,27 @@ class LLMFeatureExtractorBackend(BaseFeatureExtractorBackend):
             return values[:target_size]
         return values + [0.0] * (target_size - len(values))
 
+    def _feature_row_from_groups(self, query: str, model_answer: str, groups: Any) -> dict[str, Any]:
+        feature_row: dict[str, Any] = {
+            "query": query,
+            "model_answer": model_answer,
+        }
+
+        uncertainty_values = self._align_group(groups.uncertainty, len(FeatureSchema.uncertainty_map))
+        internal_values = self._align_group(groups.internal_scalars, len(FeatureSchema.internal_scalars_map))
+        probe_values = self._align_group(groups.probe_vec, len(FeatureSchema.probe_vec_map))
+        attention_values = self._align_group(groups.attention_entropy, len(FeatureSchema.attention_entropy_map))
+        entropy_drop_values = self._align_group(groups.entropy_drops, len(FeatureSchema.entropy_drops_map))
+        moe_values = self._align_group(groups.moe_routing, len(FeatureSchema.moe_routing_map))
+
+        feature_row.update(dict(zip(FeatureSchema.uncertainty_map, uncertainty_values)))
+        feature_row.update(dict(zip(FeatureSchema.internal_scalars_map, internal_values)))
+        feature_row.update(dict(zip(FeatureSchema.probe_vec_map, probe_values)))
+        feature_row.update(dict(zip(FeatureSchema.attention_entropy_map, attention_values)))
+        feature_row.update(dict(zip(FeatureSchema.entropy_drops_map, entropy_drop_values)))
+        feature_row.update(dict(zip(FeatureSchema.moe_routing_map, moe_values)))
+        return feature_row
+
     def _feature_row_from_pair(self, query: str, model_answer: str) -> dict[str, Any]:
         tokenizer: Any = self._tokenizer
         assert tokenizer is not None
@@ -244,25 +265,7 @@ class LLMFeatureExtractorBackend(BaseFeatureExtractorBackend):
                 logits: torch.Tensor = self._extract_logits(model_output)
                 groups = self._extractor.extract(logits=logits, input_ids=full_ids, answer_start=answer_start)
 
-        feature_row: dict[str, Any] = {
-            "query": query,
-            "model_answer": model_answer,
-        }
-
-        uncertainty_values = self._align_group(groups.uncertainty, len(FeatureSchema.uncertainty_map))
-        internal_values = self._align_group(groups.internal_scalars, len(FeatureSchema.internal_scalars_map))
-        probe_values = self._align_group(groups.probe_vec, len(FeatureSchema.probe_vec_map))
-        attention_values = self._align_group(groups.attention_entropy, len(FeatureSchema.attention_entropy_map))
-        entropy_drop_values = self._align_group(groups.entropy_drops, len(FeatureSchema.entropy_drops_map))
-        moe_values = self._align_group(groups.moe_routing, len(FeatureSchema.moe_routing_map))
-
-        feature_row.update(dict(zip(FeatureSchema.uncertainty_map, uncertainty_values)))
-        feature_row.update(dict(zip(FeatureSchema.internal_scalars_map, internal_values)))
-        feature_row.update(dict(zip(FeatureSchema.probe_vec_map, probe_values)))
-        feature_row.update(dict(zip(FeatureSchema.attention_entropy_map, attention_values)))
-        feature_row.update(dict(zip(FeatureSchema.entropy_drops_map, entropy_drop_values)))
-        feature_row.update(dict(zip(FeatureSchema.moe_routing_map, moe_values)))
-        return feature_row
+        return self._feature_row_from_groups(query=query, model_answer=model_answer, groups=groups)
 
     def _batched_pairs(self, queries: list[str], model_answers: list[str]) -> Iterator[tuple[list[str], list[str]]]:
         batch_size: int = max(int(self.config.feature_batch_size), 1)
@@ -271,10 +274,65 @@ class LLMFeatureExtractorBackend(BaseFeatureExtractorBackend):
             yield queries[start:stop], model_answers[start:stop]
 
     def build_features(self, queries: list[str], model_answers: list[str]) -> pd.DataFrame:
+        tokenizer: Any = self._tokenizer
+        extractor: LLMFeatureExtractor | None = self._extractor
+        if tokenizer is None or extractor is None:
+            raise RuntimeError("Feature extractor не инициализирован")
+
         rows: list[dict[str, Any]] = []
         for batch_queries, batch_answers in self._batched_pairs(queries=queries, model_answers=model_answers):
-            for query, answer in zip(batch_queries, batch_answers):
-                rows.append(self._feature_row_from_pair(query=query, model_answer=answer))
+            full_token_rows: list[torch.Tensor] = []
+            answer_starts: list[int] = []
+            sequence_lengths: list[int] = []
+
+            for query, model_answer in zip(batch_queries, batch_answers):
+                prompt_text: str = self._build_prompt(query)
+                prompt_ids: torch.Tensor = tokenizer(prompt_text, return_tensors="pt")["input_ids"].to(self._device)
+                answer_ids: torch.Tensor = tokenizer(model_answer, return_tensors="pt", add_special_tokens=False)[
+                    "input_ids"
+                ].to(self._device)
+                if int(answer_ids.shape[1]) == 0:
+                    answer_ids = tokenizer(" ", return_tensors="pt", add_special_tokens=False)["input_ids"].to(self._device)
+
+                full_ids: torch.Tensor = torch.cat([prompt_ids, answer_ids], dim=1)
+                full_row: torch.Tensor = full_ids[0]
+                full_token_rows.append(full_row)
+                answer_starts.append(int(prompt_ids.shape[1]))
+                sequence_lengths.append(int(full_ids.shape[1]))
+
+            max_seq_len: int = max(sequence_lengths)
+            pad_token_id: int | None = getattr(tokenizer, "pad_token_id", None)
+            if pad_token_id is None:
+                pad_token_id = getattr(tokenizer, "eos_token_id", 0)
+
+            batched_input_ids = torch.full(
+                (len(full_token_rows), max_seq_len),
+                int(pad_token_id),
+                dtype=full_token_rows[0].dtype,
+                device=self._device,
+            )
+            for row_index, token_row in enumerate(full_token_rows):
+                batched_input_ids[row_index, : int(token_row.shape[0])] = token_row
+
+            with torch.inference_mode():
+                with extractor:
+                    model_output: Any = extractor(batched_input_ids)
+                    logits: torch.Tensor = self._extract_logits(model_output)
+
+                    for sample_index, (query, model_answer) in enumerate(zip(batch_queries, batch_answers)):
+                        seq_len: int = sequence_lengths[sample_index]
+                        sample_logits: torch.Tensor = logits[sample_index : sample_index + 1, :seq_len, :]
+                        sample_input_ids: torch.Tensor = batched_input_ids[sample_index : sample_index + 1, :seq_len]
+                        groups = extractor.extract(
+                            logits=sample_logits,
+                            input_ids=sample_input_ids,
+                            answer_start=answer_starts[sample_index],
+                            hidden_batch_index=sample_index,
+                            clear_hidden=False,
+                        )
+                        rows.append(self._feature_row_from_groups(query=query, model_answer=model_answer, groups=groups))
+                    extractor._hidden.clear()
+
         return pd.DataFrame(rows)
 
 

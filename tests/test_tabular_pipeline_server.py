@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import *
 
 import pandas as pd
+import torch
 
 from src.servers.utils.tabular_pipeline_utils import (
     DummyFeatureExtractorBackend,
@@ -149,6 +150,67 @@ def test_llm_feature_extractor_backend_batches_pairs_by_configured_size() -> Non
     )
 
     assert [len(batch_queries) for batch_queries, _ in batches] == [2, 2, 1]
+
+
+def test_llm_feature_extractor_backend_uses_single_forward_per_batch() -> None:
+    class _FakeTokenizer:
+        pad_token_id: int = 0
+        eos_token_id: int = 0
+
+        def __call__(self, text: str, return_tensors: str = "pt", add_special_tokens: bool = True) -> dict[str, torch.Tensor]:
+            _ = (return_tensors, add_special_tokens)
+            token_count: int = max(len(str(text).split()), 1)
+            return {"input_ids": torch.arange(1, token_count + 1, dtype=torch.long).unsqueeze(0)}
+
+    class _FakeGroups:
+        def __init__(self) -> None:
+            self.uncertainty = [0.0] * len(TabularPipelineService.__mro__)
+            self.internal_scalars = []
+            self.probe_vec = []
+            self.attention_entropy = []
+            self.entropy_drops = []
+            self.moe_routing = []
+
+    class _FakeExtractor:
+        def __init__(self) -> None:
+            self.forward_calls: int = 0
+            self._hidden: dict[str, torch.Tensor] = {}
+
+        def __enter__(self) -> "_FakeExtractor":
+            return self
+
+        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+            _ = (exc_type, exc_val, exc_tb)
+
+        def __call__(self, token_ids: torch.Tensor) -> dict[str, torch.Tensor]:
+            self.forward_calls += 1
+            batch, seq = int(token_ids.shape[0]), int(token_ids.shape[1])
+            return {"logits": torch.zeros((batch, seq, 8), dtype=torch.float32)}
+
+        def extract(
+            self,
+            logits: torch.Tensor,
+            input_ids: torch.Tensor,
+            answer_start: int,
+            hidden_batch_index: int = 0,
+            clear_hidden: bool = True,
+        ) -> Any:
+            _ = (logits, input_ids, answer_start, hidden_batch_index, clear_hidden)
+            return _FakeGroups()
+
+    backend: LLMFeatureExtractorBackend = LLMFeatureExtractorBackend.__new__(LLMFeatureExtractorBackend)
+    backend.config = TabularPipelineServerConfig(feature_batch_size=2)
+    backend._device = torch.device("cpu")
+    backend._tokenizer = _FakeTokenizer()
+    fake_extractor = _FakeExtractor()
+    backend._extractor = fake_extractor
+
+    backend.build_features(
+        queries=["q1", "q2", "q3", "q4", "q5"],
+        model_answers=["a1", "a2", "a3", "a4", "a5"],
+    )
+
+    assert fake_extractor.forward_calls == 3
 
 
 

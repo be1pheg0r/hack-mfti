@@ -50,6 +50,7 @@ def test_full_evaluate_writes_predict_proba_for_query_column(tmp_path: Path, mon
             input_csv=input_csv,
             output_csv=output_csv,
             feature_batch_size=7,
+            save_plots=False,
         )
     )
 
@@ -77,6 +78,7 @@ def test_full_evaluate_supports_prompt_column(tmp_path: Path, monkeypatch: Any) 
         FullEvaluateConfig(
             input_csv=input_csv,
             output_csv=output_csv,
+            save_plots=False,
         )
     )
 
