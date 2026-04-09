@@ -1,4 +1,5 @@
 export type img = string
+export type video = string
 
 export type QuestionChoice = {
   id: string
@@ -21,7 +22,7 @@ export type StoryStep = {
   id: string
   text: string
   visualLabel: string
-  image: img
+  image: img | video
 }
 
 export type LessonStep = QuestionStep | StoryStep

@@ -133,6 +133,26 @@
   cursor: not-allowed;
 }
 
+.continue-button.continue-button-correct {
+  background: #2f9e44;
+  box-shadow: 0 4px 12px rgba(47, 158, 68, 0.45);
+}
+
+.continue-button.continue-button-correct:hover:enabled {
+  background: #2b8a3e;
+  box-shadow: 0 6px 16px rgba(43, 138, 62, 0.45);
+}
+
+.continue-button.continue-button-wrong {
+  background: #e03131;
+  box-shadow: 0 4px 12px rgba(224, 49, 49, 0.45);
+}
+
+.continue-button.continue-button-wrong:hover:enabled {
+  background: #c92a2a;
+  box-shadow: 0 6px 16px rgba(201, 42, 42, 0.45);
+}
+
 @media (max-width: 900px) {
   .lesson-page {
     padding: 14px;

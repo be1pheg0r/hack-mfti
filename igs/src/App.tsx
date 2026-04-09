@@ -19,8 +19,21 @@ function App() {
     return currentStep.choices.find((choice) => choice.id === selectedChoiceId) ?? null
   }, [currentStep, selectedChoiceId])
 
-  const isContinueDisabled =
-    currentStep.kind === 'question' && !selectedChoice?.isCorrect
+  const isQuestionStep = currentStep.kind === 'question'
+  const isReactionVisible = isQuestionStep && Boolean(temporaryReaction)
+  const isCorrectChoiceChecked = isQuestionStep && isReactionVisible && Boolean(selectedChoice?.isCorrect)
+
+  const primaryButtonLabel =
+    isQuestionStep && !isCorrectChoiceChecked ? 'Ответить' : 'Продолжить'
+
+  const primaryButtonClassName =
+    isQuestionStep && isReactionVisible
+      ? selectedChoice?.isCorrect
+        ? 'continue-button continue-button-correct'
+        : 'continue-button continue-button-wrong'
+      : 'continue-button'
+
+  const isPrimaryButtonDisabled = isQuestionStep ? !selectedChoice : false
 
   const goToNextStep = () => {
     if (stepIndex >= LESSON_STEPS.length - 1) {
@@ -34,11 +47,22 @@ function App() {
     setTemporaryReaction(null)
   }
 
-  const handleContinue = () => {
-    if (currentStep.kind === 'question' && !selectedChoice?.isCorrect) {
+  const handlePrimaryAction = () => {
+    if (!isQuestionStep) {
+      goToNextStep()
       return
     }
-    goToNextStep()
+
+    if (!selectedChoice) {
+      return
+    }
+
+    if (isCorrectChoiceChecked) {
+      goToNextStep()
+      return
+    }
+
+    setTemporaryReaction(selectedChoice.reaction)
   }
 
   const handleBack = () => {
@@ -50,12 +74,11 @@ function App() {
   }
 
   const handleSelectChoice = (choiceId: string) => {
-    if (currentStep.kind !== 'question') {
+    if (!isQuestionStep) {
       return
     }
     setSelectedChoiceId(choiceId)
-    const choice = currentStep.choices.find((item) => item.id === choiceId)
-    setTemporaryReaction(choice?.reaction ?? null)
+    setTemporaryReaction(null)
   }
 
   return (
@@ -90,7 +113,7 @@ function App() {
         {currentStep.kind === 'question' ? (
           <QuestionStepView
             questionText={temporaryReaction ?? currentStep.question}
-            mascotImage={selectedChoice?.image ?? currentStep.image}
+            mascotImage={isReactionVisible && selectedChoice ? selectedChoice.image : currentStep.image}
             choices={currentStep.choices}
             selectedChoiceId={selectedChoiceId}
             onSelectChoice={handleSelectChoice}
@@ -105,11 +128,11 @@ function App() {
       <footer className="lesson-footer">
         <button
           type="button"
-          className="continue-button"
-          onClick={handleContinue}
-          disabled={isContinueDisabled}
+          className={primaryButtonClassName}
+          onClick={handlePrimaryAction}
+          disabled={isPrimaryButtonDisabled}
         >
-          Продолжить
+          {primaryButtonLabel}
         </button>
       </footer>
     </main>

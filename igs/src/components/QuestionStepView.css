@@ -85,6 +85,8 @@
   min-height: 48px;
   background: #f0f0f0;
   color: #555555;
+  /* background: linear-gradient(135deg, #dff3ff, #eafaff);
+  color: #1f5c86; */
   font-size: 20px;
   font-weight: 600;
   padding: 12px 18px;
@@ -94,15 +96,15 @@
 }
 
 .choice-button:hover {
-  background: #e8e8e8;
+  background: linear-gradient(135deg, #ccecff, #dbf6ff);
   transform: translateY(-2px);
 }
 
 .choice-button.selected {
-  background: linear-gradient(135deg, #d4a8ff, #f0d4ff);
-  color: #4a2d7a;
+  background: linear-gradient(135deg, #2f86ff, #34c9ff);
+  color: #ffffff;
   font-weight: 700;
-  box-shadow: 0 4px 12px rgba(212, 168, 255, 0.4);
+  box-shadow: 0 4px 12px rgba(52, 165, 255, 0.45);
 }
 
 @media (max-width: 900px) {
