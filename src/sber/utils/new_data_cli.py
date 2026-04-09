@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.logger import SBER_DATASETS_LOGGER as logger
 from common.paths import PathLike, get_data_raw_dpath, get_sber_configs_dpath
-from src.sber.datasets_utils import SberDatasetsConfig, retrieve_all_datasets, unpack_dataset
 from src.sber.utils.extract_features_cli import ScriptConfig as ExtractScriptConfig
 from src.sber.utils.extract_features_cli import run as extract_features_run
 
@@ -21,26 +20,22 @@ class NewDataConfig(BaseModel):
     """Конфигурация сборки train датасета.
 
     Attributes:
-        source_csv: CSV с исходными фичами, откуда берутся только positive-сэмплы.
+        source_csv: CSV с исходными фичами, откуда берутся positive и negative сэмплы.
         output_csv: Путь до итогового train CSV.
-        datasets_config_path: YAML-конфиг датасетов для negative-сэмплов.
         feature_model_name: Модель для извлечения фичей на negative-сэмплах.
         feature_config_path: YAML-конфиг feature extractor.
         batch_size: Batch size для извлечения фичей.
         seed: Seed для детерминированности.
-        force_download: Принудительная загрузка датасетов.
     """
 
     model_config = ConfigDict(frozen=True)
 
     source_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / "merged_features_with_judge_scores.csv")
     output_csv: PathLike = Field(default_factory=lambda: Path(get_data_raw_dpath()) / "new_train_dataset.csv")
-    datasets_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "datasets_configs.yaml")
     feature_model_name: str = "ai-sage/GigaChat3-10B-A1.8B-bf16"
     feature_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "hooks_config.yaml")
     batch_size: int = 2
     seed: int = 42
-    force_download: bool = False
 
     @field_validator("batch_size")
     @classmethod
@@ -67,14 +62,9 @@ class _PositiveLabelResolver:
 
 def parse_args() -> NewDataConfig:
     """Парсит CLI-аргументы new_data скрипта."""
-    parser = argparse.ArgumentParser(description="Сборка нового train CSV из positive + свежих negative")
+    parser = argparse.ArgumentParser(description="Сборка нового train CSV из positive + negative source CSV")
     parser.add_argument("--source-csv", type=str, default=str(Path(get_data_raw_dpath()) / "merged_features_with_judge_scores.csv"))
     parser.add_argument("--output-csv", type=str, default=str(Path(get_data_raw_dpath()) / "new_train_dataset.csv"))
-    parser.add_argument(
-        "--datasets-config-path",
-        type=str,
-        default=str(Path(get_sber_configs_dpath()) / "datasets_configs.yaml"),
-    )
     parser.add_argument("--feature-model-name", type=str, default="ai-sage/GigaChat3-10B-A1.8B-bf16")
     parser.add_argument(
         "--feature-config-path",
@@ -83,7 +73,6 @@ def parse_args() -> NewDataConfig:
     )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--force-download", action="store_true")
     namespace: argparse.Namespace = parser.parse_args()
     return NewDataConfig.model_validate(vars(namespace))
 
@@ -106,8 +95,8 @@ def _resolve_prompt_column(dataframe: pd.DataFrame) -> str:
     raise ValueError("Во входном DataFrame должна быть колонка prompt или query")
 
 
-def _load_positive_samples(source_csv: PathLike) -> pd.DataFrame:
-    """Читает source CSV и оставляет только positive-сэмплы."""
+def _load_labeled_samples(source_csv: PathLike) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Читает source CSV и разделяет его на positive/negative сэмплы."""
     dataframe: pd.DataFrame = pd.read_csv(source_csv)
     target_col: str = _resolve_target_column(dataframe)
     prompt_col: str = _resolve_prompt_column(dataframe)
@@ -115,45 +104,28 @@ def _load_positive_samples(source_csv: PathLike) -> pd.DataFrame:
     if "model_answer" not in dataframe.columns:
         raise ValueError("В source_csv должна быть колонка model_answer")
 
-    positive_mask: list[bool] = [_PositiveLabelResolver.to_bool(value) for value in dataframe[target_col].tolist()]
-    positives: pd.DataFrame = dataframe.loc[positive_mask, [prompt_col, "model_answer"]].copy()
+    base_rows = dataframe.loc[:, [prompt_col, "model_answer", target_col]].copy()
+    base_rows = base_rows.rename(columns={prompt_col: "prompt"})
+    base_rows = base_rows[base_rows["prompt"].astype("string").str.len() > 0].copy()
+    base_rows = base_rows[base_rows["model_answer"].astype("string").str.len() > 0].copy()
+    if base_rows.empty:
+        raise ValueError("После фильтрации пустых prompt/model_answer датасет пуст")
+
+    positive_mask: list[bool] = [_PositiveLabelResolver.to_bool(value) for value in base_rows[target_col].tolist()]
+    positive_selector: pd.Series = pd.Series(positive_mask, index=base_rows.index)
+    positives = base_rows.loc[positive_selector, ["prompt", "model_answer"]].copy()
+    negatives = base_rows.loc[~positive_selector, ["prompt", "model_answer"]].copy()
+
     if positives.empty:
         raise ValueError("После фильтрации positive-сэмплов датасет пуст")
+    if negatives.empty:
+        raise ValueError("После фильтрации negative-сэмплов датасет пуст")
 
-    positives = positives.rename(columns={prompt_col: "prompt"})
     positives["is_hallucination"] = 1
-    positives = positives[positives["prompt"].astype("string").str.len() > 0].copy()
-    positives = positives[positives["model_answer"].astype("string").str.len() > 0].copy()
     positives = positives.reset_index(drop=True)
-    return positives
-
-
-def _build_negative_base_dataframe(config: NewDataConfig) -> pd.DataFrame:
-    """Собирает negative-сэмплы из датасетов конфига."""
-    datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
-    datasets_map: dict[str, Any] = retrieve_all_datasets(config=datasets_config, force_download=config.force_download)
-
-    rows: list[dict[str, Any]] = []
-    for dataset_name, dataset in datasets_map.items():
-        queries, answers = unpack_dataset(dataset=dataset, name=dataset_name)
-        for query, answer in zip(queries, answers):
-            rows.append(
-                {
-                    "dataset_name": dataset_name,
-                    "prompt": str(query).strip(),
-                    "model_answer": str(answer).strip(),
-                    "is_hallucination": 0,
-                }
-            )
-
-    negatives_raw: pd.DataFrame = pd.DataFrame(rows)
-    if negatives_raw.empty:
-        raise ValueError("Не удалось собрать negative-сэмплы из датасетов")
-
-    negatives_raw = negatives_raw[negatives_raw["prompt"].astype("string").str.len() > 0].copy()
-    negatives_raw = negatives_raw[negatives_raw["model_answer"].astype("string").str.len() > 0].copy()
-    negatives_raw = negatives_raw.reset_index(drop=True)
-    return negatives_raw
+    negatives["is_hallucination"] = 0
+    negatives = negatives.reset_index(drop=True)
+    return positives, negatives
 
 
 def _extract_features(rows: pd.DataFrame, config: NewDataConfig) -> pd.DataFrame:
@@ -173,7 +145,6 @@ def _extract_features(rows: pd.DataFrame, config: NewDataConfig) -> pd.DataFrame
             input_csv_path=input_fpath,
             input_query_column="prompt",
             input_answer_column="model_answer",
-            datasets_config_path=config.datasets_config_path,
             feature_config_path=config.feature_config_path,
         )
         extract_features_run(config=extract_config)
@@ -192,8 +163,7 @@ def _extract_features(rows: pd.DataFrame, config: NewDataConfig) -> pd.DataFrame
 
 def run(config: NewDataConfig) -> Path:
     """Собирает итоговый train датасет и сохраняет его на диск."""
-    positives_raw: pd.DataFrame = _load_positive_samples(source_csv=config.source_csv)
-    negatives_raw: pd.DataFrame = _build_negative_base_dataframe(config=config)
+    positives_raw, negatives_raw = _load_labeled_samples(source_csv=config.source_csv)
     positives_features: pd.DataFrame = _extract_features(rows=positives_raw, config=config)
     negatives_features: pd.DataFrame = _extract_features(rows=negatives_raw, config=config)
 

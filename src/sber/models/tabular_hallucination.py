@@ -30,6 +30,7 @@ from sklearn.metrics import (
 )
 
 from common.logger import INFERENCE_LOGGER, SBER_TRAIN_LOGGER
+from src.sber.utils.map_bench_columns_cli import build_val_feature_to_train_mapping
 from common.paths import (
     PathLike,
     get_data_bench_dpath,
@@ -82,7 +83,6 @@ class OptunaTuningConfig(BaseModel):
     Attributes:
         enabled: Включить подбор гиперпараметров.
         n_trials: Число trial для подбора параметров модели.
-        threshold_trials: Число trial для подбора порога лучшей модели.
         timeout_sec: Опциональный таймаут одного study в секундах.
     """
 
@@ -90,14 +90,13 @@ class OptunaTuningConfig(BaseModel):
 
     enabled: bool = False
     n_trials: int = 15
-    threshold_trials: int = 30
     timeout_sec: int | None = None
 
-    @field_validator("n_trials", "threshold_trials")
+    @field_validator("n_trials")
     @classmethod
     def validate_positive_int(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("n_trials и threshold_trials должны быть положительными")
+            raise ValueError("n_trials должен быть положительным")
         return value
 
     @field_validator("timeout_sec")
@@ -394,6 +393,23 @@ class TabularPreprocessor:
         self.selected_feature_names: list[str] = []
         self.selected_groups: list[str] = []
 
+    def _align_input_schema(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+        """Нормализует вход: prompt->query и feature_* alias -> train names."""
+        result: pd.DataFrame = dataframe.copy()
+
+        if "query" not in result.columns and "prompt" in result.columns:
+            result["query"] = result["prompt"]
+
+        alias_map: dict[str, str] = build_val_feature_to_train_mapping()
+        rename_map: dict[str, str] = {}
+        for source_name, target_name in alias_map.items():
+            if source_name in result.columns and target_name not in result.columns:
+                rename_map[source_name] = target_name
+        if rename_map:
+            result = result.rename(columns=rename_map)
+
+        return result
+
     def _count_tokens(self, text: str) -> int:
         return len(str(text).split())
 
@@ -475,6 +491,16 @@ class TabularPreprocessor:
             result[column_name] = pd.to_numeric(result[column_name], errors="coerce")
         return result
 
+    def _append_matrix_columns(
+        self,
+        dataframe: pd.DataFrame,
+        values: np.ndarray,
+        column_names: list[str],
+    ) -> pd.DataFrame:
+        """Добавляет набор колонок одним concat, чтобы избежать DataFrame fragmentation."""
+        appended_df = pd.DataFrame(values, columns=column_names, index=dataframe.index)
+        return pd.concat([dataframe, appended_df], axis=1)
+
     def _drop_bad_features(self, train_df: pd.DataFrame, val_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         if not self.config.bad_features:
             return train_df, val_df
@@ -502,8 +528,10 @@ class TabularPreprocessor:
         return selected_features
 
     def fit_transform(self, train_df: pd.DataFrame, val_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-        prepared_train: pd.DataFrame = self._add_text_features(train_df)
-        prepared_val: pd.DataFrame = self._add_text_features(val_df)
+        aligned_train: pd.DataFrame = self._align_input_schema(train_df)
+        aligned_val: pd.DataFrame = self._align_input_schema(val_df)
+        prepared_train: pd.DataFrame = self._add_text_features(aligned_train)
+        prepared_val: pd.DataFrame = self._add_text_features(aligned_val)
         prepared_train, prepared_val = self._fit_tfidf(prepared_train, prepared_val)
         prepared_train, prepared_val = self._drop_bad_features(prepared_train, prepared_val)
         prepared_train = self._coerce_numeric_columns(prepared_train)
@@ -521,8 +549,8 @@ class TabularPreprocessor:
             pca_names: list[str] = [f"pca_probe_vec_{index}" for index in range(pca_components)]
             prepared_train = prepared_train.drop(columns=selected_probe)
             prepared_val = prepared_val.drop(columns=selected_probe)
-            prepared_train[pca_names] = train_probe
-            prepared_val[pca_names] = val_probe
+            prepared_train = self._append_matrix_columns(prepared_train, train_probe, pca_names)
+            prepared_val = self._append_matrix_columns(prepared_val, val_probe, pca_names)
             self.selected_feature_names = [name for name in self.selected_feature_names if name not in selected_probe] + pca_names
 
         tfidf_cols = [name for name in self.tfidf_feature_names if name in self.selected_feature_names]
@@ -534,8 +562,8 @@ class TabularPreprocessor:
             tfidf_pca_names: list[str] = [f"pca_tfidf_{index}" for index in range(pca_components)]
             prepared_train = prepared_train.drop(columns=tfidf_cols)
             prepared_val = prepared_val.drop(columns=tfidf_cols)
-            prepared_train[tfidf_pca_names] = train_tfidf
-            prepared_val[tfidf_pca_names] = val_tfidf
+            prepared_train = self._append_matrix_columns(prepared_train, train_tfidf, tfidf_pca_names)
+            prepared_val = self._append_matrix_columns(prepared_val, val_tfidf, tfidf_pca_names)
             self.selected_feature_names = [name for name in self.selected_feature_names if name not in tfidf_cols] + tfidf_pca_names
 
         if self.config.scaling:
@@ -552,7 +580,8 @@ class TabularPreprocessor:
         return prepared_train, prepared_val, self.selected_feature_names
 
     def transform(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        prepared: pd.DataFrame = self._add_text_features(dataframe)
+        aligned: pd.DataFrame = self._align_input_schema(dataframe)
+        prepared: pd.DataFrame = self._add_text_features(aligned)
         prepared = self._apply_tfidf(prepared)
         prepared = self._coerce_numeric_columns(prepared)
 
@@ -562,7 +591,7 @@ class TabularPreprocessor:
                 transformed = self.pca_probe.transform(prepared[source_cols].fillna(0.0).values)
                 pca_names: list[str] = [f"pca_probe_vec_{index}" for index in range(transformed.shape[1])]
                 prepared = prepared.drop(columns=source_cols)
-                prepared[pca_names] = transformed
+                prepared = self._append_matrix_columns(prepared, transformed, pca_names)
 
         if self.pca_tfidf is not None and self.tfidf_feature_names:
             source_cols = [name for name in self.tfidf_feature_names if name in prepared.columns]
@@ -570,7 +599,7 @@ class TabularPreprocessor:
                 transformed = self.pca_tfidf.transform(prepared[source_cols].fillna(0.0).values)
                 pca_names = [f"pca_tfidf_{index}" for index in range(transformed.shape[1])]
                 prepared = prepared.drop(columns=source_cols)
-                prepared[pca_names] = transformed
+                prepared = self._append_matrix_columns(prepared, transformed, pca_names)
 
         missing = [name for name in self.selected_feature_names if name not in prepared.columns]
         if missing:
@@ -597,14 +626,9 @@ class TabularHallucinationTrainer:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         return checkpoint_dir
 
-    def _best_threshold(self, y_true: pd.Series, y_probs: np.ndarray) -> tuple[float, float]:
-        thresholds = np.linspace(0.0, 1.0, num=101)
-        f1_values: list[float] = []
-        for threshold in thresholds:
-            preds = (y_probs >= threshold).astype(int)
-            f1_values.append(float(f1_score(y_true, preds)))
-        best_idx: int = int(np.argmax(f1_values))
-        return float(thresholds[best_idx]), float(f1_values[best_idx])
+    def _fixed_threshold(self) -> float:
+        """Возвращает фиксированный порог бинаризации без подбора."""
+        return 0.5
 
     def _fit_model(
         self,
@@ -730,19 +754,7 @@ class TabularHallucinationTrainer:
         )
         tuned_scores = self._predict_scores(model=tuned_model, features_df=x_val)
 
-        def threshold_objective(trial: Any) -> float:
-            threshold: float = float(trial.suggest_float("threshold", 0.01, 0.99))
-            preds = (tuned_scores >= threshold).astype(int)
-            return float(f1_score(y_val, preds, zero_division=0))
-
-        threshold_study = optuna.create_study(direction="maximize")
-        threshold_study.optimize(
-            threshold_objective,
-            n_trials=self.config.optuna.threshold_trials,
-            timeout=self.config.optuna.timeout_sec,
-            show_progress_bar=False,
-        )
-        best_threshold: float = float(threshold_study.best_params["threshold"])
+        best_threshold: float = self._fixed_threshold()
         tuned_metrics = self._compute_validation_metrics(y_true=y_val, y_scores=tuned_scores, threshold=best_threshold)
         TRAIN_LOGGER.info(
             "Optuna завершен для '%s': ROC_AUC=%.6f, AP=%.6f, F1=%.6f, threshold=%.4f",
@@ -909,16 +921,29 @@ class TabularHallucinationTrainer:
 
             for axis_index, feature_name in enumerate(batch_features):
                 axis = axes[axis_index]
-                sns.histplot(
-                    data=combined_plot_df,
-                    x=feature_name,
-                    hue="split",
-                    bins=30,
-                    kde=True,
-                    stat="density",
-                    common_norm=False,
-                    ax=axis,
-                )
+                try:
+                    sns.histplot(
+                        data=combined_plot_df,
+                        x=feature_name,
+                        hue="split",
+                        bins=30,
+                        kde=True,
+                        stat="density",
+                        common_norm=False,
+                        ax=axis,
+                    )
+                except Exception:
+                    # Для константных/вырожденных распределений KDE может падать; рисуем только гистограмму.
+                    sns.histplot(
+                        data=combined_plot_df,
+                        x=feature_name,
+                        hue="split",
+                        bins=30,
+                        kde=False,
+                        stat="density",
+                        common_norm=False,
+                        ax=axis,
+                    )
                 axis.set_title(feature_name)
 
             for axis in axes[len(batch_features) :]:
@@ -1019,7 +1044,7 @@ class TabularHallucinationTrainer:
                 )
 
                 val_scores = self._predict_scores(model=model, features_df=x_val)
-                threshold, _ = self._best_threshold(y_val, val_scores)
+                threshold: float = self._fixed_threshold()
                 metrics = self._compute_validation_metrics(y_true=y_val, y_scores=val_scores, threshold=threshold)
                 all_metrics[variant.name] = metrics
                 TRAIN_LOGGER.info(

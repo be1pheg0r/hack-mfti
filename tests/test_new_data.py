@@ -11,29 +11,15 @@ from src.sber.utils.new_data_cli import NewDataConfig, run
 def test_new_data_builds_combined_dataset_without_dedup_by_prompt(tmp_path: Path, monkeypatch: Any) -> None:
     source_csv: Path = tmp_path / "source.csv"
     output_csv: Path = tmp_path / "output.csv"
-    datasets_yaml: Path = tmp_path / "datasets.yaml"
-    datasets_yaml.write_text("datasets:\n  dataset_names: ['rubq-20']\n", encoding="utf-8")
 
     pd.DataFrame(
         {
-            "query": ["same_prompt", "positive_only", "negative_in_source"],
-            "model_answer": ["ans1", "ans2", "ans3"],
-            "is_hallucination": [1, 1, 0],
-            "feature_probe_vec_0": [0.1, 0.2, 0.3],
+            "query": ["same_prompt", "positive_only", "same_prompt", "negative_only"],
+            "model_answer": ["ans1", "ans2", "ans3", "ans4"],
+            "is_hallucination": [1, 1, 0, 0],
+            "feature_probe_vec_0": [0.1, 0.2, 0.3, 0.4],
         }
     ).to_csv(source_csv, index=False)
-
-    def fake_retrieve_all_datasets(config: Any, force_download: bool = False) -> dict[str, Any]:
-        _ = (config, force_download)
-        return {
-            "rubq-20": [{"question_text": "same_prompt", "answer_text": "good_answer"}],
-            "tape-chegeka.raw": [{"question": "neg_prompt", "answer": "good_answer_2"}],
-        }
-
-    def fake_unpack_dataset(dataset: Iterable[dict[str, Any]], name: str) -> tuple[list[str], list[str]]:
-        if name == "rubq-20":
-            return [str(item["question_text"]) for item in dataset], [str(item["answer_text"]) for item in dataset]
-        return [str(item["question"]) for item in dataset], [str(item["answer"]) for item in dataset]
 
     def fake_extract_run(config: Any) -> Path:
         input_df: pd.DataFrame = pd.read_csv(config.input_csv_path)
@@ -47,15 +33,12 @@ def test_new_data_builds_combined_dataset_without_dedup_by_prompt(tmp_path: Path
         result_df.to_csv(output_path, index=False)
         return output_path
 
-    monkeypatch.setattr("src.sber.utils.new_data_cli.retrieve_all_datasets", fake_retrieve_all_datasets)
-    monkeypatch.setattr("src.sber.utils.new_data_cli.unpack_dataset", fake_unpack_dataset)
     monkeypatch.setattr("src.sber.utils.new_data_cli.extract_features_run", fake_extract_run)
 
     output_path: Path = run(
         NewDataConfig(
             source_csv=source_csv,
             output_csv=output_csv,
-            datasets_config_path=datasets_yaml,
             feature_config_path=tmp_path / "hooks.yaml",
         )
     )
@@ -63,8 +46,8 @@ def test_new_data_builds_combined_dataset_without_dedup_by_prompt(tmp_path: Path
     assert output_path == output_csv
     result: pd.DataFrame = pd.read_csv(output_csv)
 
-    # same_prompt присутствует и у positives, и у negatives, дубликаты сохраняются.
-    assert sorted(result["prompt"].tolist()) == ["neg_prompt", "positive_only", "same_prompt", "same_prompt"]
+    # same_prompt присутствует и у positives, и у negatives source CSV, дубликаты сохраняются.
+    assert sorted(result["prompt"].tolist()) == ["negative_only", "positive_only", "same_prompt", "same_prompt"]
     assert len(result) == 4
     assert int(result["is_hallucination"].sum()) == 2
 
@@ -72,8 +55,6 @@ def test_new_data_builds_combined_dataset_without_dedup_by_prompt(tmp_path: Path
 def test_new_data_supports_legacy_target_typo_column(tmp_path: Path, monkeypatch: Any) -> None:
     source_csv: Path = tmp_path / "source_typo.csv"
     output_csv: Path = tmp_path / "output_typo.csv"
-    datasets_yaml: Path = tmp_path / "datasets.yaml"
-    datasets_yaml.write_text("datasets:\n  dataset_names: ['rubq-20']\n", encoding="utf-8")
 
     pd.DataFrame(
         {
@@ -83,21 +64,11 @@ def test_new_data_supports_legacy_target_typo_column(tmp_path: Path, monkeypatch
         }
     ).to_csv(source_csv, index=False)
 
-    monkeypatch.setattr(
-        "src.sber.utils.new_data_cli.retrieve_all_datasets",
-        lambda config, force_download=False: {"rubq-20": [{"question_text": "neg", "answer_text": "ok"}]},
-    )
-    monkeypatch.setattr("src.sber.utils.new_data_cli.unpack_dataset", lambda dataset, name: (["neg"], ["ok"]))
-
     def fake_extract_run(config: Any) -> Path:
-        pd.DataFrame(
-            {
-                "prompt": ["neg"],
-                "query": ["neg"],
-                "model_answer": ["ok"],
-                "is_hallucination": [0],
-            }
-        ).to_csv(config.output_csv, index=False)
+        input_df: pd.DataFrame = pd.read_csv(config.input_csv_path)
+        result_df: pd.DataFrame = input_df.copy()
+        result_df["query"] = result_df["prompt"]
+        result_df.to_csv(config.output_csv, index=False)
         return Path(config.output_csv)
 
     monkeypatch.setattr("src.sber.utils.new_data_cli.extract_features_run", fake_extract_run)
@@ -106,7 +77,6 @@ def test_new_data_supports_legacy_target_typo_column(tmp_path: Path, monkeypatch
         NewDataConfig(
             source_csv=source_csv,
             output_csv=output_csv,
-            datasets_config_path=datasets_yaml,
             feature_config_path=tmp_path / "hooks.yaml",
         )
     )

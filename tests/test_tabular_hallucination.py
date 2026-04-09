@@ -8,6 +8,7 @@ import pandas as pd
 from src.sber.models.tabular_hallucination import (
     FeatureGroupFlags,
     TabularHallucinationPredictor,
+    TabularPreprocessor,
     TabularHallucinationTrainer,
     TabularTrainConfig,
 )
@@ -79,4 +80,45 @@ def test_train_and_infer_roundtrip(tmp_path: Path) -> None:
     assert latest_dir.exists()
     assert train_result.best_architecture in {"catboost", "xgboost", "lightgbm", "logreg"}
     assert "average_precision" in train_result.validation_metrics
+
+
+def test_preprocessor_accepts_prompt_and_feature_alias_columns() -> None:
+    train_df = pd.DataFrame(
+        {
+            "prompt": ["q1", "q2", "q3", "q4"],
+            "model_answer": ["a1", "a2", "a3", "a4"],
+            "is_hallucination": [1, 0, 1, 0],
+            "feature_uncertainty_token_logprob_mean": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    val_df = train_df.copy()
+
+    config = TabularTrainConfig(
+        train_csv="unused.csv",
+        val_csv="unused.csv",
+        feature_flags=FeatureGroupFlags(
+            uncertainty=True,
+            internal_scalars=False,
+            probe_vec=False,
+            attention_entropy=False,
+            entropy_drops=False,
+            moe_routing=False,
+            text_features=False,
+            tfidf=False,
+        ),
+        pca_n_components=None,
+        tfidf_n_components=None,
+        under_sampling=False,
+        oversampling=False,
+        plot_feature_distributions=False,
+    )
+
+    preprocessor = TabularPreprocessor(config=config)
+    processed_train, processed_val, selected = preprocessor.fit_transform(train_df, val_df)
+
+    assert "query" in processed_train.columns
+    assert "mean_log_prob" in processed_train.columns
+    assert "mean_log_prob" in processed_val.columns
+    assert selected == ["mean_log_prob"]
+
 

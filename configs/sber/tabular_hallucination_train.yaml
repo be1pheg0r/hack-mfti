@@ -1,6 +1,6 @@
 tabular_hallucination_train:
-  train_csv: "data/raw/merged_features_with_judge_scores.csv"
-  val_csv: "data/bench/bench_processed_judged_mapped.csv"
+  train_csv: "data/raw/new_train_dataset.csv"
+  val_csv: "data/bench/bench_processed.csv"
   target_col: "is_hallucination"
   run_name: null
   output_root: "public_checkpoints/sber_tabular"
@@ -8,7 +8,7 @@ tabular_hallucination_train:
   feature_flags:
     uncertainty: true
     internal_scalars: true
-    probe_vec: false
+    probe_vec: true
     attention_entropy: true
     entropy_drops: true
     moe_routing: true
@@ -19,11 +19,9 @@ tabular_hallucination_train:
   tfidf_max_features: 1000
   tfidf_n_components: 64
   scaling: false
-  under_sampling: false
-  oversampling: true
-  bad_features:
-    - "min_entropy"
-    - "std_entropy"
+  under_sampling: true
+  oversampling: false
+  bad_features: []
 
   plot_feature_distributions: false
   feature_plot_batch_size: 24
@@ -50,12 +48,13 @@ tabular_hallucination_train:
   optuna:
     enabled: true
     n_trials: 15
-    threshold_trials: 30
+
     timeout_sec: 600
 
   ignore_warnings_during_training: true
 
   random_seed: 42
+
   iterations: 10000
   learning_rate: 0.05
   depth: 6
