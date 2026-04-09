@@ -355,9 +355,13 @@ class LLMFeatureExtractor(nn.Module, AbstractContextManager["LLMFeatureExtractor
         input_ids: torch.Tensor,
         answer_start: int,
     ) -> list[float]:
-        """Считает uncertainty-фичи по токенам ответа."""
+        """Считает uncertainty-фичи по токенам ответа с causal shift.
+
+        Для токена ответа на позиции `t` используется распределение из логитов
+        на позиции `t - 1`, как в стандартной causal LM objective.
+        """
         seq_len: int = int(input_ids.shape[1])
-        answer_logits: torch.Tensor = logits[0, answer_start:seq_len, :]
+        answer_logits: torch.Tensor = logits[0, answer_start - 1 : seq_len - 1, :]
         answer_ids: torch.Tensor = input_ids[0, answer_start:seq_len]
         n_answer_tokens: int = int(answer_ids.shape[0])
 

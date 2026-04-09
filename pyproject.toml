@@ -25,12 +25,12 @@ dependencies = [
     "rapidfuzz",
     "huggingface-hub",
     "gradio",
+    "datasets",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "datasets",
     "kaggle",
     "jupyter",
     "optuna",
