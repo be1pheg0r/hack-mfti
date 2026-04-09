@@ -90,6 +90,7 @@ function App() {
         {currentStep.kind === 'question' ? (
           <QuestionStepView
             questionText={temporaryReaction ?? currentStep.question}
+            mascotImage={selectedChoice?.image ?? currentStep.image}
             choices={currentStep.choices}
             selectedChoiceId={selectedChoiceId}
             onSelectChoice={handleSelectChoice}

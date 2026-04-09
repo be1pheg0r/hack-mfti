@@ -1,9 +1,11 @@
+export type img = string
+
 export type QuestionChoice = {
   id: string
   text: string
   reaction: string
   isCorrect?: boolean
-  // image: img
+  image: img
 }
 
 export type QuestionStep = {
@@ -11,7 +13,7 @@ export type QuestionStep = {
   id: string
   question: string
   choices: QuestionChoice[]
-  // image: img
+  image: img
 }
 
 export type StoryStep = {
@@ -19,7 +21,7 @@ export type StoryStep = {
   id: string
   text: string
   visualLabel: string
-  // image: img
+  image: img
 }
 
 export type LessonStep = QuestionStep | StoryStep

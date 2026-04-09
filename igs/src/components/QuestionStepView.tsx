@@ -1,8 +1,11 @@
 import type { QuestionChoice } from '../types/lesson'
+import MASCOT_FRAMES from '../types/mascot'
+import ezhikImage from '../assets/ezhik_grid_2x5_clean.png'
 import './QuestionStepView.css'
 
 type QuestionStepViewProps = {
   questionText: string
+  mascotImage: string
   choices: QuestionChoice[]
   selectedChoiceId: string | null
   onSelectChoice: (choiceId: string) => void
@@ -10,20 +13,35 @@ type QuestionStepViewProps = {
   onShowQuestion: () => void
 }
 
+function getMascotFrame(image: string) {
+  return MASCOT_FRAMES[image] ?? MASCOT_FRAMES.neutral
+}
+
 export function QuestionStepView({
   questionText,
+  mascotImage,
   choices,
   selectedChoiceId,
   onSelectChoice,
   showQuestionButton,
   onShowQuestion,
 }: QuestionStepViewProps) {
+  const frame = getMascotFrame(mascotImage)
+  const x = (frame.col / 4) * 100
+  const y = frame.row * 100
+
   return (
     <>
       <div className="top-section">
         <div className="character-container">
           <div className="character-card" aria-hidden="true">
-            •
+            <div
+              className="character-sprite"
+              style={{
+                backgroundImage: `url(${ezhikImage})`,
+                backgroundPosition: `${x}% ${y}%`,
+              }}
+            ></div>
           </div>
         </div>
 
