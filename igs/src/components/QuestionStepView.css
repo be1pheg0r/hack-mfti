@@ -35,6 +35,7 @@
   background-repeat: no-repeat;
   background-size: 500% 200%;
   background-position: 0% 0%;
+  transition: background-position 0.18s ease-out; 
 }
 
 .right-column {

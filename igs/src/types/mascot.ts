@@ -9,11 +9,6 @@ const MASCOT_FRAMES: Record<string, { col: number; row: number }> = {
   scared: { col: 2, row: 1 },
   shocked: { col: 3, row: 1 },
   calm: { col: 4, row: 1 },
-  sleepy: { col: 0, row: 1 },
-  cool: { col: 4, row: 1 },
-  laugh: { col: 1, row: 1 },
-  cry: { col: 2, row: 1 },
-  idea: { col: 3, row: 1 },
 }
 
 export default MASCOT_FRAMES

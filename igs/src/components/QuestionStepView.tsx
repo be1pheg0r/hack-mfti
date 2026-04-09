@@ -29,6 +29,7 @@ export function QuestionStepView({
   const frame = getMascotFrame(mascotImage)
   const x = (frame.col / 4) * 100
   const y = frame.row * 100
+  const rowOffset = frame.row === 1 ? -2 : 0
 
   return (
     <>
@@ -39,7 +40,7 @@ export function QuestionStepView({
               className="character-sprite"
               style={{
                 backgroundImage: `url(${ezhikImage})`,
-                backgroundPosition: `${x}% ${y}%`,
+                backgroundPosition: `calc(${x}% + 0px) calc(${y}% + ${rowOffset}px)`,
               }}
             ></div>
           </div>
