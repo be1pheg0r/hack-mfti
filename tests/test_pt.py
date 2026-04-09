@@ -183,3 +183,28 @@ def test_dummy_feature_model_returns_random_features_with_expected_shapes() -> N
     assert all(torch.isfinite(torch.tensor(all_values)).tolist())
 
 
+def test_uncertainty_uses_answer_span_logits_slice() -> None:
+    model = DummyModel(vocab_size=5, hidden_size=8, n_layers=2)
+    config = FeatureExtractorConfig(
+        probe_layers=[0],
+        enable_attention_entropy=False,
+        enable_moe_routing=False,
+    )
+    extractor = LLMFeatureExtractor(model=model, config=config)
+
+    input_ids: torch.Tensor = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    logits: torch.Tensor = torch.zeros((1, 4, 5), dtype=torch.float32)
+    logits[0, 2, 3] = 6.0
+    logits[0, 3, 4] = 5.0
+    logits[0, 1, 0] = 9.0  # Шум на позиции до ответа: не должен влиять на expected.
+
+    features = extractor.extract(logits=logits, input_ids=input_ids, answer_start=2)
+
+    selected_logits: torch.Tensor = logits[0, 2:4, :]
+    selected_ids: torch.Tensor = input_ids[0, 2:4]
+    expected_log_probs: torch.Tensor = torch.log_softmax(selected_logits, dim=-1).gather(1, selected_ids.unsqueeze(1)).squeeze(-1)
+
+    assert abs(features.uncertainty[0] - torch.mean(expected_log_probs).item()) < 1e-6
+    assert abs(features.uncertainty[9] - expected_log_probs[0].item()) < 1e-6
+
+

@@ -16,6 +16,7 @@ from src.sber.utils.extract_features_cli import (
     _coerce_field_to_float_if_needed,
     _extract_expected_float_field_name,
     _flatten_feature_groups,
+    _resolve_answer_column_name,
     _resolve_query_column_name,
     _sample_balanced_queries_and_answers,
     _sample_dataframe_rows,
@@ -83,6 +84,18 @@ def test_resolve_query_column_name_prefers_query_then_prompt() -> None:
 def test_resolve_query_column_name_raises_when_column_missing() -> None:
     with pytest.raises(ValueError, match="query или prompt"):
         _resolve_query_column_name(["id", "text"])
+
+
+def test_resolve_answer_column_name_prefers_model_answer_then_fallbacks() -> None:
+    assert _resolve_answer_column_name(["id", "model_answer"]) == "model_answer"
+    assert _resolve_answer_column_name(["id", "answer"]) == "answer"
+    assert _resolve_answer_column_name(["id", "generated_answer"]) == "generated_answer"
+    assert _resolve_answer_column_name(["id", "correct_answer"]) == "correct_answer"
+
+
+def test_resolve_answer_column_name_raises_when_column_missing() -> None:
+    with pytest.raises(ValueError, match="колонка с ответом"):
+        _resolve_answer_column_name(["id", "text"])
 
 
 def test_sample_dataframe_rows_is_deterministic_for_n() -> None:

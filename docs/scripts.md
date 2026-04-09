@@ -29,18 +29,21 @@
 | `--n` | `int` | `None` | Число обрабатываемых сэмплов (иначе все). |
 | `--seed` | `int` | `42` | Seed для shuffle и sampling. |
 | `--model-name` | `str` | `ai-sage/GigaChat3-10B-A1.8B-bf16` | HF-модель для извлечения фичей. |
-| `--batch-size` | `int` | `2` | Размер батча генерации. |
-| `--max-new-tokens` | `int` | `64` | Максимум новых токенов ответа. |
-| `--temperature-mean` | `float` | `1.0` | Средняя температура генерации. |
-| `--temperature-std` | `float` | `0.2` | Std температуры генерации. |
-| `--temperature-min` | `float` | `0.3` | Нижняя граница температуры. |
-| `--temperature-max` | `float` | `1.7` | Верхняя граница температуры. |
+| `--batch-size` | `int` | `2` | Размер батча обработки пар `query + answer`. |
+| `--max-new-tokens` | `int` | `64` | Legacy-аргумент (сохранен для обратной совместимости, в новом пайплайне не используется). |
+| `--temperature-mean` | `float` | `1.0` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
+| `--temperature-std` | `float` | `0.2` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
+| `--temperature-min` | `float` | `0.3` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
+| `--temperature-max` | `float` | `1.7` | Legacy-аргумент (не используется в teacher-forcing пайплайне). |
 | `--output-csv` | `str` | `data/raw/model_features.csv` | Путь до итогового CSV. |
 | `--force-download` | `flag` | `False` | Принудительно перекачать датасеты. |
 | `--input-csv-path` | `str` | `None` | Входной CSV; если задан, YAML-датасеты не используются. |
 | `--input-query-column` | `str` | `None` | Явная колонка с запросом (`query`/`prompt`). |
+| `--input-answer-column` | `str` | `None` | Явная колонка с ответом (`model_answer`/`answer`/`generated_answer`/`correct_answer`). |
 | `--datasets-config-path` | `str` | [`configs/sber/datasets_configs.yaml`](../configs/sber/datasets_configs.yaml) | YAML-конфиг датасетов. |
 | `--feature-config-path` | `str` | [`configs/sber/hooks_config.yaml`](../configs/sber/hooks_config.yaml) | YAML-конфиг извлечения фичей. |
+
+Примечание: `extract_features` теперь использует teacher-forcing режим — для каждой пары `query + model_answer` выполняется единый `forward`, затем фичи считаются по answer-span (`answer_start..end`) без вызова `generate()`.
 
 ## [`scripts/generate_mistral_judged_dataset.py`](../scripts/generate_mistral_judged_dataset.py)
 Обертка над [`src/sber/utils/generate_mistral_judged_dataset_cli.py`](../src/sber/utils/generate_mistral_judged_dataset_cli.py).

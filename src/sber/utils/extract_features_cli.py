@@ -41,16 +41,17 @@ class ScriptConfig(BaseModel):
             Если не задано, обрабатываются все сэмплы из всех датасетов.
         seed: Seed для воспроизводимого перемешивания.
         model_name: Hugging Face имя модели.
-        batch_size: Размер батча для генерации.
-        max_new_tokens: Максимум новых токенов при генерации.
-        temperature_mean: Среднее температуры для сэмплирования из нормального распределения.
-        temperature_std: Стандартное отклонение температуры.
-        temperature_min: Нижняя граница температуры после clipping.
-        temperature_max: Верхняя граница температуры после clipping.
+        batch_size: Размер батча для обработки пар вопрос-ответ.
+        max_new_tokens: Legacy-параметр (сохранен для обратной совместимости CLI).
+        temperature_mean: Legacy-параметр (сохранен для обратной совместимости CLI).
+        temperature_std: Legacy-параметр (сохранен для обратной совместимости CLI).
+        temperature_min: Legacy-параметр (сохранен для обратной совместимости CLI).
+        temperature_max: Legacy-параметр (сохранен для обратной совместимости CLI).
         output_csv: Путь к итоговому CSV с фичами.
         force_download: Принудительная перезагрузка датасетов.
         input_csv_path: Опциональный путь к входному CSV с колонкой `query` или `prompt`.
         input_query_column: Явное имя колонки с текстом запроса во входном CSV.
+        input_answer_column: Явное имя колонки с ответом модели во входном CSV.
         datasets_config_path: Опциональный путь к YAML-конфигу датасетов.
         feature_config_path: Опциональный путь к YAML-конфигу фичей.
     """
@@ -70,6 +71,7 @@ class ScriptConfig(BaseModel):
     force_download: bool = False
     input_csv_path: PathLike | None = None
     input_query_column: str | None = None
+    input_answer_column: str | None = None
     datasets_config_path: PathLike = Field(default_factory=lambda: Path(get_sber_configs_dpath()) / "datasets_configs.yaml")
     feature_config_path: PathLike | None = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
 
@@ -89,10 +91,10 @@ class ScriptConfig(BaseModel):
             raise ValueError("Параметр n должен быть положительным")
         return value
 
-    @field_validator("input_query_column")
+    @field_validator("input_query_column", "input_answer_column")
     @classmethod
-    def validate_input_query_column(cls, value: str | None) -> str | None:
-        """Проверяет, что имя query-колонки не пустое, если задано."""
+    def validate_input_column_name(cls, value: str | None) -> str | None:
+        """Проверяет, что имя входной колонки не пустое, если задано."""
         if value is None:
             return None
         normalized: str = value.strip()
@@ -191,6 +193,12 @@ def parse_args() -> ScriptConfig:
         type=str,
         default=None,
         help="Явное имя колонки с запросом во входном CSV (иначе auto: query -> prompt)",
+    )
+    parser.add_argument(
+        "--input-answer-column",
+        type=str,
+        default=None,
+        help="Явное имя колонки с ответом во входном CSV (иначе auto: model_answer -> answer -> generated_answer -> correct_answer)",
     )
     parser.add_argument(
         "--datasets-config-path",
@@ -428,6 +436,22 @@ def _resolve_query_column_name(columns: Sequence[str], preferred_column: str | N
     raise ValueError("Во входном CSV должна быть колонка query или prompt")
 
 
+def _resolve_answer_column_name(columns: Sequence[str], preferred_column: str | None = None) -> str:
+    """Определяет колонку ответа во входном CSV."""
+    available: set[str] = {str(column) for column in columns}
+    if preferred_column is not None:
+        if preferred_column in available:
+            return preferred_column
+        raise ValueError(f"Колонка {preferred_column} не найдена во входном CSV")
+
+    for candidate in ("model_answer", "answer", "generated_answer", "correct_answer"):
+        if candidate in available:
+            return candidate
+    raise ValueError(
+        "Во входном CSV должна быть колонка с ответом: model_answer, answer, generated_answer или correct_answer"
+    )
+
+
 def _sample_dataframe_rows(dataframe: pd.DataFrame, n: int | None, seed: int) -> pd.DataFrame:
     """Возвращает детерминированный сэмпл строк DataFrame."""
     total_size: int = int(len(dataframe))
@@ -616,7 +640,8 @@ def _extract_rows_for_samples(
     *,
     config: ScriptConfig,
     sampled_queries: list[str],
-    sampled_answers: list[str] | None,
+    sampled_model_answers: list[str],
+    reference_answers: list[str] | None,
     base_rows: list[dict[str, Any]] | None,
     sample_id_offset: int,
 ) -> list[dict[str, Any]]:
@@ -633,57 +658,31 @@ def _extract_rows_for_samples(
     feature_columns: list[str] = []
     sample_counter: int = sample_id_offset
     sample_index_in_slice: int = 0
-    temperature_rng: random.Random = random.Random(config.seed + sample_id_offset)
 
     with torch.inference_mode():
         with extractor:  # type: ignore[arg-type]
             total_batches: int = (len(sampled_queries) + config.batch_size - 1) // config.batch_size
             progress_bar = tqdm(total=total_batches, desc="Извлечение фичей", disable=sample_id_offset != 0)
-            for batch_queries, batch_answers in _batched_pairs(
+            for batch_queries, batch_model_answers in _batched_pairs(
                 queries=sampled_queries,
-                answers=sampled_answers if sampled_answers is not None else [""] * len(sampled_queries),
+                answers=sampled_model_answers,
                 batch_size=config.batch_size,
             ):
-                batch_temperature: float = _sample_temperature(
-                    rng=temperature_rng,
-                    mean=config.temperature_mean,
-                    std=config.temperature_std,
-                    min_value=config.temperature_min,
-                    max_value=config.temperature_max,
-                )
-                prompts: list[str] = [_build_prompt(tokenizer=tokenizer, query=query) for query in batch_queries]
-                encoded: dict[str, torch.Tensor] = tokenizer(
-                    prompts,
-                    return_tensors="pt",
-                    padding=True,
-                )
-                input_ids: torch.Tensor = encoded["input_ids"].to(input_device)
-                attention_mask: torch.Tensor = encoded["attention_mask"].to(input_device)
-
-                generated: torch.Tensor = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=config.max_new_tokens,
-                    do_sample=True,
-                    temperature=batch_temperature,
-                    pad_token_id=tokenizer.pad_token_id,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
-
-                padded_prompt_len: int = int(input_ids.shape[1])
-                prompt_lengths: list[int] = [int(value) for value in attention_mask.sum(dim=1).tolist()]
-
                 for index_in_batch in range(len(batch_queries)):
-                    full_sequence: torch.Tensor = generated[index_in_batch]
-                    prompt_len: int = prompt_lengths[index_in_batch]
-                    left_padding_size: int = padded_prompt_len - prompt_len
-                    if left_padding_size > 0:
-                        full_sequence = full_sequence[left_padding_size:]
+                    query: str = batch_queries[index_in_batch]
+                    model_answer: str = str(batch_model_answers[index_in_batch]).strip()
+                    prompt_text: str = _build_prompt(tokenizer=tokenizer, query=query)
+                    prompt_ids: torch.Tensor = tokenizer(prompt_text, return_tensors="pt")["input_ids"].to(input_device)
+                    answer_ids: torch.Tensor = tokenizer(model_answer, return_tensors="pt", add_special_tokens=False)[
+                        "input_ids"
+                    ].to(input_device)
+                    if int(answer_ids.shape[1]) == 0:
+                        answer_ids = tokenizer(" ", return_tensors="pt", add_special_tokens=False)["input_ids"].to(
+                            input_device
+                        )
 
-                    answer_start: int = prompt_len
-                    answer_ids: torch.Tensor = full_sequence[answer_start:]
-                    model_answer: str = tokenizer.decode(answer_ids, skip_special_tokens=True).strip()
-                    full_ids: torch.Tensor = full_sequence.unsqueeze(0)
+                    full_ids: torch.Tensor = torch.cat([prompt_ids, answer_ids], dim=1)
+                    answer_start: int = int(prompt_ids.shape[1])
 
                     model_output: Any = extractor(full_ids)
                     logits: torch.Tensor = _extract_logits(model_output)
@@ -707,14 +706,14 @@ def _extract_rows_for_samples(
                     row.update(
                         {
                             "sample_id": sample_counter,
-                            "query": batch_queries[index_in_batch],
+                            "query": query,
                             "model_answer": model_answer,
-                            "temperature": batch_temperature,
+                            "temperature": None,
                         }
                     )
 
-                    if sampled_answers is not None and sample_index_in_slice < len(sampled_answers):
-                        reference_answer: str = sampled_answers[sample_index_in_slice]
+                    if reference_answers is not None and sample_index_in_slice < len(reference_answers):
+                        reference_answer: str = reference_answers[sample_index_in_slice]
                         row["correct_answer"] = reference_answer
                         hallucination_score: float = float(fuzz.partial_ratio(model_answer.lower(), reference_answer.lower()))
                         row["hallucination_score"] = hallucination_score
@@ -728,7 +727,7 @@ def _extract_rows_for_samples(
                     sample_index_in_slice += 1
                     sample_counter += 1
 
-                    del full_ids, logits, extracted_features, feature_vector
+                    del prompt_ids, answer_ids, full_ids, logits, extracted_features, feature_vector
 
                 progress_bar.update(1)
             progress_bar.close()
@@ -746,7 +745,8 @@ def run(config: ScriptConfig) -> Path:
         Путь до сохраненного CSV файла.
     """
     sampled_queries: list[str]
-    sampled_answers: list[str] | None
+    sampled_model_answers: list[str]
+    reference_answers: list[str] | None
     base_rows: list[dict[str, Any]] | None
 
     if config.input_csv_path is not None:
@@ -757,20 +757,29 @@ def run(config: ScriptConfig) -> Path:
             columns=[str(column) for column in sampled_dataframe.columns],
             preferred_column=config.input_query_column,
         )
+        answer_column: str = _resolve_answer_column_name(
+            columns=[str(column) for column in sampled_dataframe.columns],
+            preferred_column=config.input_answer_column,
+        )
         normalized_queries: list[str] = sampled_dataframe[query_column].astype("string").fillna("").str.strip().tolist()
+        normalized_answers: list[str] = sampled_dataframe[answer_column].astype("string").fillna("").str.strip().tolist()
         if any(not query for query in normalized_queries):
             raise ValueError(f"Во входном CSV найдены пустые значения в колонке {query_column}")
+        if any(not answer for answer in normalized_answers):
+            raise ValueError(f"Во входном CSV найдены пустые значения в колонке {answer_column}")
 
         sampled_queries = [str(query) for query in normalized_queries]
-        sampled_answers = None
-        if "correct_answer" in sampled_dataframe.columns:
+        sampled_model_answers = [str(answer) for answer in normalized_answers]
+        reference_answers = None
+        if "correct_answer" in sampled_dataframe.columns and answer_column != "correct_answer":
             answers_series = sampled_dataframe["correct_answer"].astype("string").fillna("").str.strip()
             if answers_series.str.len().gt(0).all():
-                sampled_answers = [str(answer) for answer in answers_series.tolist()]
+                reference_answers = [str(answer) for answer in answers_series.tolist()]
 
         base_rows = sampled_dataframe.to_dict(orient="records")
         logger.info(
-            f"Использую входной CSV {input_path}. Выбрано {len(sampled_queries)} строк, query-колонка: {query_column}"
+            f"Использую входной CSV {input_path}. Выбрано {len(sampled_queries)} строк, "
+            f"query-колонка: {query_column}, answer-колонка: {answer_column}"
         )
     else:
         datasets_config: SberDatasetsConfig = SberDatasetsConfig.from_yaml(config.datasets_config_path)
@@ -778,14 +787,15 @@ def run(config: ScriptConfig) -> Path:
             config=datasets_config,
             force_download=config.force_download,
         )
-        sampled_queries, sampled_answers = _sample_balanced_queries_and_answers(
+        sampled_queries, sampled_model_answers = _sample_balanced_queries_and_answers(
             datasets_map=datasets_map,
             n=config.n,
             seed=config.seed,
         )
+        reference_answers = [answer for answer in sampled_model_answers]
         base_rows = [
             {"query": query, "correct_answer": answer}
-            for query, answer in zip(sampled_queries, sampled_answers)
+            for query, answer in zip(sampled_queries, sampled_model_answers)
         ]
 
         if config.n is None:
@@ -802,7 +812,8 @@ def run(config: ScriptConfig) -> Path:
     output_rows: list[dict[str, Any]] = _extract_rows_for_samples(
         config=config,
         sampled_queries=sampled_queries,
-        sampled_answers=sampled_answers,
+        sampled_model_answers=sampled_model_answers,
+        reference_answers=reference_answers,
         base_rows=base_rows,
         sample_id_offset=0,
     )
@@ -812,11 +823,16 @@ def run(config: ScriptConfig) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     dataframe.to_csv(output_path, index=False)
 
-    hallucinations_count: int = int(dataframe["is_hallucination"].sum())
-    hallucinations_ratio: float = (hallucinations_count / max(len(dataframe), 1)) * 100.0
+    if "is_hallucination" in dataframe.columns:
+        hallucination_series: pd.Series = pd.to_numeric(dataframe["is_hallucination"], errors="coerce")
+    else:
+        hallucination_series = pd.Series(dtype="float64")
+    hallucinations_count: int = int(hallucination_series.fillna(0.0).sum())
+    valid_labels_count: int = int(hallucination_series.notna().sum())
+    hallucinations_ratio: float = (hallucinations_count / max(valid_labels_count, 1)) * 100.0
     logger.info(f"CSV сохранен: {output_path}")
     logger.info(f"Обработано сэмплов: {len(dataframe)}")
-    logger.info(f"Галлюцинаций: {hallucinations_count} ({hallucinations_ratio:.1f}%)")
+    logger.info(f"Галлюцинаций: {hallucinations_count} ({hallucinations_ratio:.1f}%) на {valid_labels_count} размеченных сэмплах")
     return output_path
 
 
