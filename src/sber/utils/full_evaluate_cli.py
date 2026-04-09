@@ -28,6 +28,7 @@ class FullEvaluateConfig(BaseModel):
         checkpoint_dir: Директория tabular-чекпоинта.
         feature_model_name: Имя/путь LLM модели для извлечения фичей.
         feature_config_path: YAML-конфиг feature extractor.
+        feature_batch_size: Размер батча feature extractor.
         input_query_column: Явная query-колонка (если не задана, auto: query -> prompt).
         threshold: Опциональный override порога классификации.
     """
@@ -39,8 +40,16 @@ class FullEvaluateConfig(BaseModel):
     checkpoint_dir: PathLike = "sber_tabular/latest"
     feature_model_name: str = DEFAULT_SBER_SCRIPT_MODEL_NAME
     feature_config_path: PathLike = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
+    feature_batch_size: int = 2
     input_query_column: str | None = None
     threshold: float | None = None
+
+    @field_validator("feature_batch_size")
+    @classmethod
+    def validate_feature_batch_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("feature_batch_size должен быть положительным")
+        return value
 
     @field_validator("input_query_column")
     @classmethod
@@ -74,6 +83,7 @@ def parse_args() -> FullEvaluateConfig:
     parser.add_argument("--checkpoint-dir", type=str, default="sber_tabular/latest")
     parser.add_argument("--feature-model-name", type=str, default=DEFAULT_SBER_SCRIPT_MODEL_NAME)
     parser.add_argument("--feature-config-path", type=str, default=str(DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH))
+    parser.add_argument("--feature-batch-size", type=int, default=2)
     parser.add_argument("--input-query-column", type=str, default=None)
     parser.add_argument("--threshold", type=float, default=None)
     namespace: argparse.Namespace = parser.parse_args()
@@ -120,6 +130,7 @@ def run(config: FullEvaluateConfig) -> Path:
         feature_model_name=config.feature_model_name,
         checkpoint_dir=config.checkpoint_dir,
         feature_config_path=config.feature_config_path,
+        feature_batch_size=config.feature_batch_size,
     )
     service: TabularPipelineService = TabularPipelineService(config=service_config)
 

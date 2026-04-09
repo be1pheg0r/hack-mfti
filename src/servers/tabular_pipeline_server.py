@@ -29,6 +29,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TabularPipelineServerConfig
     parser.add_argument("--feature-extractor-mode", type=str, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default=None)
     parser.add_argument("--feature-config-path", type=str, default=None)
+    parser.add_argument("--feature-batch-size", type=int, default=None)
 
     namespace: argparse.Namespace = parser.parse_args(argv)
     return load_config_from_namespace(

@@ -13,9 +13,10 @@ class _DummyService:
     """Легковесный mock сервиса для тестов full evaluate."""
 
     captured_queries: list[str] = []
+    captured_feature_batch_size: int | None = None
 
     def __init__(self, config: object) -> None:
-        _ = config
+        _DummyService.captured_feature_batch_size = int(getattr(config, "feature_batch_size", 0))
 
     def predict(self, request: Any) -> dict[str, list[float] | list[int]]:
         queries: list[str] = list(request.queries)
@@ -48,6 +49,7 @@ def test_full_evaluate_writes_predict_proba_for_query_column(tmp_path: Path, mon
         FullEvaluateConfig(
             input_csv=input_csv,
             output_csv=output_csv,
+            feature_batch_size=7,
         )
     )
 
@@ -56,6 +58,7 @@ def test_full_evaluate_writes_predict_proba_for_query_column(tmp_path: Path, mon
     assert "predict_proba" in result.columns
     assert result["predict_proba"].tolist() == pytest.approx([0.73, 0.73])
     assert result["pred_is_hallucination"].tolist() == [1, 1]
+    assert _DummyService.captured_feature_batch_size == 7
 
 
 def test_full_evaluate_supports_prompt_column(tmp_path: Path, monkeypatch: Any) -> None:

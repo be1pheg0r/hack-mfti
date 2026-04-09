@@ -6,6 +6,7 @@ import pandas as pd
 
 from src.servers.utils.tabular_pipeline_utils import (
     DummyFeatureExtractorBackend,
+    LLMFeatureExtractorBackend,
     TabularPipelineRequest,
     TabularPipelineServerConfig,
     TabularPipelineService,
@@ -134,6 +135,20 @@ def test_tabular_pipeline_service_dummy_mode_uses_classifier_for_precomputed_fea
 
     assert response["pred_is_hallucination"] == [1]
     assert response["hallucination_score"] == [0.77]
+
+
+def test_llm_feature_extractor_backend_batches_pairs_by_configured_size() -> None:
+    backend: LLMFeatureExtractorBackend = LLMFeatureExtractorBackend.__new__(LLMFeatureExtractorBackend)
+    backend.config = TabularPipelineServerConfig(feature_batch_size=2)
+
+    batches = list(
+        backend._batched_pairs(
+            queries=["q1", "q2", "q3", "q4", "q5"],
+            model_answers=["a1", "a2", "a3", "a4", "a5"],
+        )
+    )
+
+    assert [len(batch_queries) for batch_queries, _ in batches] == [2, 2, 1]
 
 
 

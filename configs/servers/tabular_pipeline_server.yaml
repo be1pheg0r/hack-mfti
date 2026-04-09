@@ -6,5 +6,6 @@ tabular_pipeline_server:
   feature_extractor_mode: "real"
   checkpoint_dir: "sber_tabular/latest"
   feature_config_path: "configs/sber/hooks_config.yaml"
+  feature_batch_size: 2
 
 

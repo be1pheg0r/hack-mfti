@@ -27,6 +27,7 @@ class TabularPipelineServerConfig(BaseModel):
         checkpoint_dir: Директория tabular-чекпоинта.
         feature_config_path: Путь до YAML-конфига feature extractor.
         feature_extractor_mode: Режим экстрактора фичей (`real` или `dummy`).
+        feature_batch_size: Размер батча для feature extractor.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -38,6 +39,7 @@ class TabularPipelineServerConfig(BaseModel):
     checkpoint_dir: PathLike = "sber_tabular/latest"
     feature_config_path: PathLike = DEFAULT_FEATURE_EXTRACTION_CONFIGS_FPATH
     feature_extractor_mode: str = "real"
+    feature_batch_size: int = 2
 
     @field_validator("host", "feature_model_name", "serve_mode", "feature_extractor_mode")
     @classmethod
@@ -47,11 +49,11 @@ class TabularPipelineServerConfig(BaseModel):
             raise ValueError("Строковый параметр не может быть пустым")
         return normalized
 
-    @field_validator("port")
+    @field_validator("port", "feature_batch_size")
     @classmethod
     def validate_positive_port(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("port должен быть положительным")
+            raise ValueError("Числовой параметр должен быть положительным")
         return value
 
     @field_validator("serve_mode")
@@ -262,11 +264,17 @@ class LLMFeatureExtractorBackend(BaseFeatureExtractorBackend):
         feature_row.update(dict(zip(FeatureSchema.moe_routing_map, moe_values)))
         return feature_row
 
+    def _batched_pairs(self, queries: list[str], model_answers: list[str]) -> Iterator[tuple[list[str], list[str]]]:
+        batch_size: int = max(int(self.config.feature_batch_size), 1)
+        for start in range(0, len(queries), batch_size):
+            stop: int = min(start + batch_size, len(queries))
+            yield queries[start:stop], model_answers[start:stop]
+
     def build_features(self, queries: list[str], model_answers: list[str]) -> pd.DataFrame:
-        rows: list[dict[str, Any]] = [
-            self._feature_row_from_pair(query=query, model_answer=answer)
-            for query, answer in zip(queries, model_answers)
-        ]
+        rows: list[dict[str, Any]] = []
+        for batch_queries, batch_answers in self._batched_pairs(queries=queries, model_answers=model_answers):
+            for query, answer in zip(batch_queries, batch_answers):
+                rows.append(self._feature_row_from_pair(query=query, model_answer=answer))
         return pd.DataFrame(rows)
 
 

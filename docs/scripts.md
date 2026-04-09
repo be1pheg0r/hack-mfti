@@ -31,6 +31,7 @@
 | `--checkpoint-dir` | `str` | `sber_tabular/latest` | Директория tabular-чекпоинта. |
 | `--feature-model-name` | `str` | `ai-sage/GigaChat3-10B-A1.8B-bf16` | LLM для feature extraction. |
 | `--feature-config-path` | `str` | [`configs/sber/hooks_config.yaml`](../configs/sber/hooks_config.yaml) | YAML-конфиг извлечения фичей. |
+| `--feature-batch-size` | `int` | `2` | Размер батча feature extractor внутри tabular pipeline. |
 | `--input-query-column` | `str` | `None` | Явное имя query-колонки (иначе auto: `query` -> `prompt`). |
 | `--threshold` | `float` | `None` | Override порога бинарной метки. |
 
@@ -129,6 +130,7 @@
 | `--feature-extractor-mode` | `str` | `None` | Override режима экстрактора (`real`/`dummy`). |
 | `--checkpoint-dir` | `str` | `None` | Override директории tabular checkpoint. |
 | `--feature-config-path` | `str` | `None` | Override YAML-конфига feature extractor. |
+| `--feature-batch-size` | `int` | `None` | Override размера батча feature extractor. |
 
 ## [`scripts/init_servers.py`](../scripts/init_servers.py)
 Оркестратор запуска tabular pipeline и Gradio.
