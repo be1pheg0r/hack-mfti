@@ -27,6 +27,12 @@ def test_parse_args_supports_dummy_flag() -> None:
     assert bool(args.without_gradio) is True
 
 
+def test_parse_args_supports_share_flag() -> None:
+    args: argparse.Namespace = parse_args(["--share"])
+
+    assert bool(args.share) is True
+
+
 def test_apply_dummy_mode_overrides_tabular_and_gradio_pipeline_url() -> None:
     tabular_config = TabularPipelineServerConfig(
         host="127.0.0.1",

@@ -30,9 +30,6 @@
 Установка зависимостей. В корне репозитория:
 ```bash
 pip install -e .
-
-# develop extras для обучения и тестов
-pip install -e .[dev]
 ```
 
 ### Запуск
@@ -46,7 +43,7 @@ python scripts/evaluate.py
 python scripts/init_servers.py
 ```
 
-3. Обучение (требует опциональных зависимостей, скрипт: [`scripts/train_tabular_hallucination.py`](scripts/train_tabular_hallucination.py)):
+3. Обучение (скрипт: [`scripts/train_tabular_hallucination.py`](scripts/train_tabular_hallucination.py)):
 ```bash
 python scripts/train_tabular_hallucination.py 
 ```

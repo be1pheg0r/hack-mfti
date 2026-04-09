@@ -33,6 +33,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Запустить tabular и Gradio поверх dummy tabular backend без тяжелых моделей",
     )
+    parser.add_argument("--share", action="store_true", help="Включить внешнюю публичную ссылку Gradio")
     parser.add_argument("--dry-run", action="store_true", help="Только вывести конфиги и команды запуска")
     return parser.parse_args(argv)
 
@@ -153,6 +154,8 @@ def run(argv: Sequence[str] | None = None) -> None:
                 "--config-path",
                 str(args.gradio_config_path),
             ]
+            if bool(args.share):
+                gradio_cmd.append("--share")
             if bool(args.dummy):
                 gradio_cmd.extend(["--pipeline-base-url", gradio_config.pipeline_base_url, "--dummy-mode"])
             processes.append(_start_process(gradio_cmd, "gradio_demo"))

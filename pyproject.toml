@@ -20,17 +20,13 @@ dependencies = [
     "seaborn==0.13.2",
     "torch==2.11.0",
     "accelerate==1.13.0",
-    "transformers==5.5.1",
+    "transformers==5.5.2",
     "protobuf==7.34.1",
     "tqdm==4.67.3",
     "rapidfuzz==3.14.5",
     "huggingface-hub==1.9.2",
     "gradio==6.11.0",
     "datasets==4.8.4",
-]
-
-[project.optional-dependencies]
-dev = [
     "pytest",
     "kaggle",
     "jupyter",
@@ -40,8 +36,6 @@ dev = [
     "lightgbm",
     "umap-learn",
     "sentence-transformers",
-]
-mistralai = [
     "mistralai",
 ]
 

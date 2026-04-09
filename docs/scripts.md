@@ -158,6 +158,7 @@
 | `--tabular-config-path` | `str` | [`configs/servers/tabular_pipeline_server.yaml`](../configs/servers/tabular_pipeline_server.yaml) | YAML-конфиг tabular сервера. |
 | `--gradio-config-path` | `str` | [`configs/servers/gradio_demo.yaml`](../configs/servers/gradio_demo.yaml) | YAML-конфиг Gradio. |
 | `--without-gradio` | `flag` | `False` | Не запускать Gradio UI. |
+| `--share` | `flag` | `False` | Включить внешнюю публичную ссылку Gradio. |
 | `--dummy` | `flag` | `False` | Запустить оба сервера в dummy-режиме. |
 | `--dry-run` | `flag` | `False` | Только вывести сводку и команды запуска. |
 
