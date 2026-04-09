@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.logger import SBER_DATASETS_LOGGER as logger
 from common.paths import PathLike, get_data_raw_dpath, get_sber_configs_dpath
-from src.sber.models.tabular_hallucination import FeatureSchema
 from src.sber.datasets_utils import SberDatasetsConfig, retrieve_all_datasets, unpack_dataset
 from src.sber.utils.extract_features_cli import ScriptConfig as ExtractScriptConfig
 from src.sber.utils.extract_features_cli import run as extract_features_run
@@ -107,53 +106,25 @@ def _resolve_prompt_column(dataframe: pd.DataFrame) -> str:
     raise ValueError("Во входном DataFrame должна быть колонка prompt или query")
 
 
-def _collect_train_feature_columns(dataframe: pd.DataFrame) -> list[str]:
-    """Возвращает список feature-колонок для train-датасета."""
-    canonical_feature_names: set[str] = set(
-        FeatureSchema.uncertainty_map
-        + FeatureSchema.internal_scalars_map
-        + FeatureSchema.probe_vec_map
-        + FeatureSchema.attention_entropy_map
-        + FeatureSchema.entropy_drops_map
-        + FeatureSchema.moe_routing_map
-    )
-    collected: list[str] = []
-    for column_name in dataframe.columns:
-        if str(column_name).startswith("feature_") or str(column_name) in canonical_feature_names:
-            collected.append(str(column_name))
-    return collected
-
-
-def _normalize_train_view(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Оставляет только prompt/model_answer/target и фичи."""
-    normalized: pd.DataFrame = dataframe.copy()
-    prompt_column: str = _resolve_prompt_column(normalized)
-    if prompt_column != "prompt":
-        normalized["prompt"] = normalized[prompt_column]
-
-    if "model_answer" not in normalized.columns:
-        raise ValueError("Во входном DataFrame должна быть колонка model_answer")
-    if "is_hallucination" not in normalized.columns:
-        raise ValueError("Во входном DataFrame должна быть колонка is_hallucination")
-
-    feature_columns: list[str] = _collect_train_feature_columns(normalized)
-    ordered_columns: list[str] = ["prompt", "model_answer", "is_hallucination"] + feature_columns
-    return normalized.loc[:, [column for column in ordered_columns if column in normalized.columns]].copy()
-
-
 def _load_positive_samples(source_csv: PathLike) -> pd.DataFrame:
     """Читает source CSV и оставляет только positive-сэмплы."""
     dataframe: pd.DataFrame = pd.read_csv(source_csv)
     target_col: str = _resolve_target_column(dataframe)
+    prompt_col: str = _resolve_prompt_column(dataframe)
+
+    if "model_answer" not in dataframe.columns:
+        raise ValueError("В source_csv должна быть колонка model_answer")
 
     positive_mask: list[bool] = [_PositiveLabelResolver.to_bool(value) for value in dataframe[target_col].tolist()]
-    positives: pd.DataFrame = dataframe.loc[positive_mask].copy()
+    positives: pd.DataFrame = dataframe.loc[positive_mask, [prompt_col, "model_answer"]].copy()
     if positives.empty:
         raise ValueError("После фильтрации positive-сэмплов датасет пуст")
 
-    if "is_hallucination" not in positives.columns:
-        positives["is_hallucination"] = 1
+    positives = positives.rename(columns={prompt_col: "prompt"})
     positives["is_hallucination"] = 1
+    positives = positives[positives["prompt"].astype("string").str.len() > 0].copy()
+    positives = positives[positives["model_answer"].astype("string").str.len() > 0].copy()
+    positives = positives.reset_index(drop=True)
     return positives
 
 
@@ -185,14 +156,14 @@ def _build_negative_base_dataframe(config: NewDataConfig) -> pd.DataFrame:
     return negatives_raw
 
 
-def _extract_negative_features(negatives_raw: pd.DataFrame, config: NewDataConfig) -> pd.DataFrame:
-    """Прогоняет negative-сэмплы через feature extractor."""
+def _extract_features(rows: pd.DataFrame, config: NewDataConfig) -> pd.DataFrame:
+    """Прогоняет строки через feature extractor и оставляет только base+feature_* колонки."""
     with tempfile.TemporaryDirectory(prefix="new_data_") as tmp_dir:
         tmp_dpath: Path = Path(tmp_dir)
-        input_fpath: Path = tmp_dpath / "negative_input.csv"
-        output_fpath: Path = tmp_dpath / "negative_features.csv"
+        input_fpath: Path = tmp_dpath / "input.csv"
+        output_fpath: Path = tmp_dpath / "features.csv"
 
-        negatives_raw.to_csv(input_fpath, index=False)
+        rows.to_csv(input_fpath, index=False)
         extract_config: ExtractScriptConfig = ExtractScriptConfig(
             seed=config.seed,
             model_name=config.feature_model_name,
@@ -206,36 +177,44 @@ def _extract_negative_features(negatives_raw: pd.DataFrame, config: NewDataConfi
             feature_config_path=config.feature_config_path,
         )
         extract_features_run(config=extract_config)
-        negatives_features: pd.DataFrame = pd.read_csv(output_fpath)
+        extracted: pd.DataFrame = pd.read_csv(output_fpath)
 
-    negatives_features["is_hallucination"] = 0
-    negatives_features["hallucination_score"] = negatives_features.get("hallucination_score", 100.0)
-    return negatives_features
+    if "prompt" not in extracted.columns and "query" in extracted.columns:
+        extracted["prompt"] = extracted["query"]
+    if "prompt" not in extracted.columns or "model_answer" not in extracted.columns:
+        raise ValueError("После extract_features ожидаются колонки prompt/query и model_answer")
+    if "is_hallucination" not in extracted.columns:
+        extracted["is_hallucination"] = pd.NA
+
+    feature_columns: list[str] = [column for column in extracted.columns if str(column).startswith("feature_")]
+    return extracted.loc[:, ["prompt", "model_answer", "is_hallucination"] + feature_columns].copy()
 
 
 def run(config: NewDataConfig) -> Path:
     """Собирает итоговый train датасет и сохраняет его на диск."""
-    positives: pd.DataFrame = _load_positive_samples(source_csv=config.source_csv)
+    positives_raw: pd.DataFrame = _load_positive_samples(source_csv=config.source_csv)
     negatives_raw: pd.DataFrame = _build_negative_base_dataframe(config=config)
-    negatives_features: pd.DataFrame = _extract_negative_features(negatives_raw=negatives_raw, config=config)
+    positives_features: pd.DataFrame = _extract_features(rows=positives_raw, config=config)
+    negatives_features: pd.DataFrame = _extract_features(rows=negatives_raw, config=config)
 
-    positives = _normalize_train_view(positives)
-    negatives_features = _normalize_train_view(negatives_features)
+    positives_features["is_hallucination"] = 1
+    negatives_features["is_hallucination"] = 0
 
-    union_feature_columns: list[str] = sorted(
-        set(_collect_train_feature_columns(positives)).union(set(_collect_train_feature_columns(negatives_features)))
+    feature_columns: list[str] = sorted(
+        set([column for column in positives_features.columns if str(column).startswith("feature_")]).union(
+            set([column for column in negatives_features.columns if str(column).startswith("feature_")])
+        )
     )
-    base_columns: list[str] = ["prompt", "model_answer", "is_hallucination"]
-    target_columns: list[str] = base_columns + union_feature_columns
+    target_columns: list[str] = ["prompt", "model_answer", "is_hallucination"] + feature_columns
 
     for column_name in target_columns:
-        if column_name not in positives.columns:
-            positives[column_name] = pd.NA
+        if column_name not in positives_features.columns:
+            positives_features[column_name] = pd.NA
         if column_name not in negatives_features.columns:
             negatives_features[column_name] = pd.NA
 
     combined: pd.DataFrame = pd.concat(
-        [positives.loc[:, target_columns], negatives_features.loc[:, target_columns]],
+        [positives_features.loc[:, target_columns], negatives_features.loc[:, target_columns]],
         ignore_index=True,
         sort=False,
     )
@@ -246,7 +225,7 @@ def run(config: NewDataConfig) -> Path:
     combined.to_csv(output_path, index=False)
 
     logger.info("Новый train датасет сохранен: %s", output_path)
-    logger.info("Позитивных сэмплов: %s", len(positives))
+    logger.info("Позитивных сэмплов: %s", len(positives_features))
     logger.info("Негативных сэмплов: %s", len(negatives_features))
     logger.info("Итоговый размер train датасета: %s", len(combined))
     return output_path
