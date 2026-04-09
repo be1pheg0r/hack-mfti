@@ -213,4 +213,39 @@ def test_llm_feature_extractor_backend_uses_single_forward_per_batch() -> None:
     assert fake_extractor.forward_calls == 3
 
 
+def test_llm_feature_extractor_backend_load_tokenizer_with_not_implemented_fallback(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_from_pretrained(source: str, **kwargs: Any) -> Any:
+        _ = source
+        calls.append(dict(kwargs))
+        if len(calls) == 1:
+            raise NotImplementedError()
+        return {"ok": True, "kwargs": kwargs}
+
+    monkeypatch.setattr("src.servers.utils.tabular_pipeline_utils.AutoTokenizer.from_pretrained", fake_from_pretrained)
+
+    backend: LLMFeatureExtractorBackend = LLMFeatureExtractorBackend.__new__(LLMFeatureExtractorBackend)
+    tokenizer = backend._load_tokenizer_with_fallback("dummy/model")
+
+    assert tokenizer["ok"] is True
+    assert len(calls) == 2
+
+
+def test_llm_feature_extractor_backend_load_tokenizer_with_all_fallbacks_failed(monkeypatch: Any) -> None:
+    def fake_from_pretrained(source: str, **kwargs: Any) -> Any:
+        _ = (source, kwargs)
+        raise NotImplementedError()
+
+    monkeypatch.setattr("src.servers.utils.tabular_pipeline_utils.AutoTokenizer.from_pretrained", fake_from_pretrained)
+
+    backend: LLMFeatureExtractorBackend = LLMFeatureExtractorBackend.__new__(LLMFeatureExtractorBackend)
+
+    try:
+        backend._load_tokenizer_with_fallback("dummy/model")
+        assert False, "Expected RuntimeError"
+    except RuntimeError:
+        assert True
+
+
 

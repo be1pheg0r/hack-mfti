@@ -196,13 +196,43 @@ class LLMFeatureExtractorBackend(BaseFeatureExtractorBackend):
         logger.info("Загружаю модель для feature extractor: %s", source)
 
         self._feature_model = AutoModelForCausalLM.from_pretrained(source, trust_remote_code=True)
-        self._tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=True)
+        self._tokenizer = self._load_tokenizer_with_fallback(source=source)
         self._feature_model = self._feature_model.to(self._device)
         self._feature_model.eval()
 
         feature_config = FeatureExtractorConfig.from_yaml(self.config.feature_config_path)
         self._extractor_config = feature_config
         self._extractor = LLMFeatureExtractor(model=self._feature_model, config=feature_config)
+
+    def _load_tokenizer_with_fallback(self, source: str) -> Any:
+        """Загружает токенизатор с fallback-стратегиями для нестабильных remote tokenizer классов."""
+        attempts: list[dict[str, Any]] = [
+            {"trust_remote_code": True},
+            {"trust_remote_code": True, "use_fast": True},
+            {"trust_remote_code": True, "use_fast": False},
+        ]
+        last_error: Exception | None = None
+        for kwargs in attempts:
+            try:
+                return AutoTokenizer.from_pretrained(source, **kwargs)
+            except NotImplementedError as error:
+                last_error = error
+                logger.warning(
+                    "Tokenizer loading failed with NotImplementedError for %s and kwargs=%s. Trying fallback.",
+                    source,
+                    kwargs,
+                )
+            except Exception as error:
+                last_error = error
+                logger.warning(
+                    "Tokenizer loading failed for %s and kwargs=%s: %s. Trying fallback.",
+                    source,
+                    kwargs,
+                    error,
+                )
+
+        assert last_error is not None
+        raise RuntimeError(f"Не удалось загрузить токенизатор для модели {source}") from last_error
 
     def _extract_logits(self, model_output: Any) -> torch.Tensor:
         if hasattr(model_output, "logits"):
