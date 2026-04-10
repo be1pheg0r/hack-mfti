@@ -20,6 +20,10 @@
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
 }
 
+.error-modal-card.error-modal-card-success {
+  border: 2px solid #c3f0b5;
+}
+
 .error-modal-message {
   margin: 0;
   text-align: center;
@@ -27,6 +31,18 @@
   line-height: 1.15;
   font-weight: 800;
   color: #232323;
+}
+
+.error-modal-card.error-modal-card-success .error-modal-message {
+  color: #2b8a3e;
+}
+
+.error-modal-paragraph {
+  margin: 0;
+  text-align: start; /* НУ ИЛИ ЦЕНТЕР */
+  color: #333333;
+  font-size: 16px;
+  line-height: 1.4;
 }
 
 .error-modal-media-row {
@@ -69,6 +85,10 @@
 
   .error-modal-message {
     font-size: 24px;
+  }
+
+  .error-modal-paragraph {
+    font-size: 15px;
   }
 
   .error-modal-media {

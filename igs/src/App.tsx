@@ -1,16 +1,49 @@
 import { useMemo, useState } from 'react'
 import './App.css'
-import { ErrorModal } from './components/ErrorModal'
+
+import blehGif from './assets/bleh.gif'
+import blueFaceGif from './assets/blue_face.gif'
+import hamsterGif from './assets/hamster.gif'
+
+import { ErrorModal, type ErrorModalScenario } from './components/ErrorModal'
 import { LESSON_STEPS } from './data/lessons'
 import { QuestionStepView } from './components/QuestionStepView'
 import { StoryStepView } from './components/StoryStepView'
+
+type ModalContent = {
+  title: string
+  paragraphs: string[]
+  imageSrc: string
+  imageAlt: string
+  actionLabel: string
+}
+
+const MODAL_CONTENT: Record<ErrorModalScenario, ModalContent> = {
+  error: {
+    title: 'Мирного пути не будет',
+    paragraphs: [
+      'Ты много раз неправильно отвечал на вопросы. Поэтому мы должны удалить твой компьютер. К сожалению, это единственный способ, чтобы ты смог продолжить обучение и стать настоящим гением.',
+      'Ладно, это шутка. Просто сфокусируйся и попробуй снова. У тебя все получится!',
+    ],
+    imageSrc: blueFaceGif, // blueFaceGif hamsterGif
+    imageAlt: 'Hamster motivator',
+    actionLabel: 'Продолжить',
+  },
+  success: {
+    title: 'Отличная работа! Ты прошел все шаги',
+    paragraphs: ['Ты завершил урок. Можешь закрепить результат и начать сначала, чтобы чувствовать себя еще увереннее.'],
+    imageSrc: blehGif, 
+    imageAlt: 'Celebration gif',
+    actionLabel: 'Начать сначала',
+  },
+}
 
 function App() {
   const [stepIndex, setStepIndex] = useState(0)
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null)
   const [temporaryReaction, setTemporaryReaction] = useState<string | null>(null)
   const [wrongAttemptsCount, setWrongAttemptsCount] = useState(0)
-  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false)
+  const [modalScenario, setModalScenario] = useState<ErrorModalScenario | null>(null)
 
   const currentStep = LESSON_STEPS[stepIndex]
   const progressPercent = ((stepIndex) / (LESSON_STEPS.length - 1)) * 100
@@ -20,6 +53,8 @@ function App() {
   )
   const errorCount = wrongAttemptsCount
   const errorPercent = totalQuestionSteps > 0 ? (errorCount / totalQuestionSteps) * 100 : 0
+  const isLastStep = stepIndex === LESSON_STEPS.length - 1
+  const activeModalContent = modalScenario ? MODAL_CONTENT[modalScenario] : null
 
   const selectedChoice = useMemo(() => {
     if (!currentStep || currentStep.kind !== 'question' || !selectedChoiceId) {
@@ -45,12 +80,7 @@ function App() {
   const isPrimaryButtonDisabled = isQuestionStep ? !selectedChoice : false
 
   const goToNextStep = () => {
-    if (stepIndex >= LESSON_STEPS.length - 1) {
-      setStepIndex(0)
-      setSelectedChoiceId(null)
-      setTemporaryReaction(null)
-      setWrongAttemptsCount(0)
-      setIsErrorModalOpen(false)
+    if (isLastStep) {
       return
     }
     setStepIndex((prev) => prev + 1)
@@ -58,8 +88,20 @@ function App() {
     setTemporaryReaction(null)
   }
 
+  const resetLesson = () => {
+    setStepIndex(0)
+    setSelectedChoiceId(null)
+    setTemporaryReaction(null)
+    setWrongAttemptsCount(0)
+    setModalScenario(null)
+  }
+
   const handlePrimaryAction = () => {
     if (!isQuestionStep) {
+      if (isLastStep) {
+        setModalScenario('success')
+        return
+      }
       goToNextStep()
       return
     }
@@ -69,6 +111,10 @@ function App() {
     }
 
     if (isCorrectChoiceChecked) {
+      if (isLastStep) {
+        setModalScenario('success')
+        return
+      }
       goToNextStep()
       return
     }
@@ -77,7 +123,7 @@ function App() {
       const nextWrongAttemptsCount = wrongAttemptsCount + 1
       if (totalQuestionSteps > 0 && nextWrongAttemptsCount >= totalQuestionSteps) {
         setWrongAttemptsCount(0)
-        setIsErrorModalOpen(true)
+        setModalScenario('error')
       } else {
         setWrongAttemptsCount(nextWrongAttemptsCount)
       }
@@ -158,10 +204,24 @@ function App() {
         </button>
       </footer>
 
-      <ErrorModal
-        isOpen={isErrorModalOpen}
-        onClose={() => setIsErrorModalOpen(false)}
-      />
+      {modalScenario && activeModalContent && (
+        <ErrorModal
+          isOpen={true}
+          scenario={modalScenario}
+          title={activeModalContent.title}
+          paragraphs={activeModalContent.paragraphs}
+          imageSrc={activeModalContent.imageSrc}
+          imageAlt={activeModalContent.imageAlt}
+          actionLabel={activeModalContent.actionLabel}
+          onAction={() => {
+            if (modalScenario === 'success') {
+              resetLesson()
+              return
+            }
+            setModalScenario(null)
+          }}
+        />
+      )}
     </main>
   )
 }
