@@ -136,7 +136,8 @@
   background: linear-gradient(135deg, #2f86ff, #34c9ff);
   color: #ffffff;
   font-weight: 700;
-  box-shadow: 0 4px 12px rgba(52, 165, 255, 0.45);
+  /* box-shadow: 0px 4px 12px rgba(52, 165, 255, 0.45); */
+  box-shadow: 4px 4px 8px rgba(52, 165, 255, 0.45);
 }
 
 @media (max-width: 900px) {
