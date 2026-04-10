@@ -3,9 +3,8 @@ import './App.css'
 
 import blehGif from './assets/bleh.gif'
 import blueFaceGif from './assets/blue_face.gif'
-// import hamsterGif from './assets/hamster.gif'
 
-import { ErrorModal, type ErrorModalScenario } from './components/ErrorModal'
+import { Modal, type ModalScenario } from './components/Modal'
 import { LESSON_STEPS } from './data/lessons'
 import { QuestionStepView } from './components/QuestionStepView'
 import { StoryStepView } from './components/StoryStepView'
@@ -18,7 +17,16 @@ type ModalContent = {
   actionLabel: string
 }
 
-const MODAL_CONTENT: Record<ErrorModalScenario, ModalContent> = {
+const MODAL_CONTENT: Record<ModalScenario, ModalContent> = {
+  intro: {
+    title: 'Мини-гайд по страхованию',
+    paragraphs: [
+      'Привет! Я твой ежик-помощник. За пару минут разберем основы страхования простыми шагами: читай карточки, выбирай ответы и не бойся ошибок.',
+    ],
+    imageSrc: '',
+    imageAlt: '',
+    actionLabel: 'Поехали',
+  },
   error: {
     title: 'Мирного решения не будет',
     paragraphs: [
@@ -43,7 +51,7 @@ function App() {
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null)
   const [temporaryReaction, setTemporaryReaction] = useState<string | null>(null)
   const [wrongAttemptsCount, setWrongAttemptsCount] = useState(0)
-  const [modalScenario, setModalScenario] = useState<ErrorModalScenario | null>(null)
+  const [modalScenario, setModalScenario] = useState<ModalScenario | null>('intro')
 
   const currentStep = LESSON_STEPS[stepIndex]
   const progressPercent = ((stepIndex) / (LESSON_STEPS.length - 1)) * 100
@@ -202,7 +210,7 @@ function App() {
       </footer>
 
       {modalScenario && activeModalContent && (
-        <ErrorModal
+        <Modal
           isOpen={true}
           scenario={modalScenario}
           title={activeModalContent.title}
