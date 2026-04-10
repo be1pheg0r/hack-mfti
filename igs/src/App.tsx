@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import './App.css'
+import { ErrorModal } from './components/ErrorModal'
 import { LESSON_STEPS } from './data/lessons'
 import { QuestionStepView } from './components/QuestionStepView'
 import { StoryStepView } from './components/StoryStepView'
@@ -9,6 +10,7 @@ function App() {
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null)
   const [temporaryReaction, setTemporaryReaction] = useState<string | null>(null)
   const [wrongAttemptsCount, setWrongAttemptsCount] = useState(0)
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false)
 
   const currentStep = LESSON_STEPS[stepIndex]
   const progressPercent = ((stepIndex) / (LESSON_STEPS.length - 1)) * 100
@@ -48,6 +50,7 @@ function App() {
       setSelectedChoiceId(null)
       setTemporaryReaction(null)
       setWrongAttemptsCount(0)
+      setIsErrorModalOpen(false)
       return
     }
     setStepIndex((prev) => prev + 1)
@@ -71,7 +74,13 @@ function App() {
     }
 
     if (!selectedChoice.isCorrect) {
-      setWrongAttemptsCount((prev) => prev + 1)
+      const nextWrongAttemptsCount = wrongAttemptsCount + 1
+      if (totalQuestionSteps > 0 && nextWrongAttemptsCount >= totalQuestionSteps) {
+        setWrongAttemptsCount(0)
+        setIsErrorModalOpen(true)
+      } else {
+        setWrongAttemptsCount(nextWrongAttemptsCount)
+      }
     }
 
     setTemporaryReaction(selectedChoice.reaction)
@@ -148,6 +157,11 @@ function App() {
           {primaryButtonLabel}
         </button>
       </footer>
+
+      <ErrorModal
+        isOpen={isErrorModalOpen}
+        onClose={() => setIsErrorModalOpen(false)}
+      />
     </main>
   )
 }

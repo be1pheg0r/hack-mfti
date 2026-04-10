@@ -1,0 +1,77 @@
+.error-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(22, 22, 26, 0.55);
+}
+
+.error-modal-card {
+  width: min(700px, 100%);
+  border-radius: 20px;
+  background: #ffffff;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+}
+
+.error-modal-message {
+  margin: 0;
+  text-align: center;
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 800;
+  color: #232323;
+}
+
+.error-modal-media-row {
+  display: flex;
+  justify-content: center;
+}
+
+.error-modal-media {
+  width: min(260px, 100%);
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
+  object-fit: contain;
+  background: transparent;
+}
+
+.error-modal-close-button {
+  width: 100%;
+  align-self: stretch;
+  border: none;
+  border-radius: 999px;
+  min-height: 50px;
+  background: #1f1f1f;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+
+}
+
+.error-modal-close-button:hover {
+  background: #101010;
+}
+
+@media (max-width: 760px) {
+  .error-modal-card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .error-modal-message {
+    font-size: 24px;
+  }
+
+  .error-modal-media {
+    width: min(220px, 100%);
+  }
+}
