@@ -12,6 +12,38 @@
   width: 100%;
 }
 
+.question-with-error-progress {
+  display: flex;
+  gap: 20px;
+  width: 100%;
+  align-items: center;
+}
+
+.question-main-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-progress-bar {
+  width: 20px;
+  height: 30vh;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: #ffe1e1;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.error-progress-fill {
+  width: 100%;
+  height: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #e03131, #ff8787);
+  transition: height 0.25s ease;
+}
+
 .character-container {
   display: flex;
   flex-direction: column;
@@ -128,5 +160,14 @@
 
   .answers-panel {
     max-width: 100%;
+  }
+
+  .question-with-error-progress {
+    gap: 14px;
+  }
+
+  .error-progress-bar {
+    height: 170px;
+    margin-top: 0;
   }
 }

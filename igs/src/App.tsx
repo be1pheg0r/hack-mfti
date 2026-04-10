@@ -8,9 +8,16 @@ function App() {
   const [stepIndex, setStepIndex] = useState(0)
   const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null)
   const [temporaryReaction, setTemporaryReaction] = useState<string | null>(null)
+  const [wrongAttemptsCount, setWrongAttemptsCount] = useState(0)
 
   const currentStep = LESSON_STEPS[stepIndex]
   const progressPercent = ((stepIndex) / (LESSON_STEPS.length - 1)) * 100
+  const totalQuestionSteps = useMemo(
+    () => LESSON_STEPS.filter((step) => step.kind === 'question').length,
+    []
+  )
+  const errorCount = wrongAttemptsCount
+  const errorPercent = totalQuestionSteps > 0 ? (errorCount / totalQuestionSteps) * 100 : 0
 
   const selectedChoice = useMemo(() => {
     if (!currentStep || currentStep.kind !== 'question' || !selectedChoiceId) {
@@ -40,6 +47,7 @@ function App() {
       setStepIndex(0)
       setSelectedChoiceId(null)
       setTemporaryReaction(null)
+      setWrongAttemptsCount(0)
       return
     }
     setStepIndex((prev) => prev + 1)
@@ -60,6 +68,10 @@ function App() {
     if (isCorrectChoiceChecked) {
       goToNextStep()
       return
+    }
+
+    if (!selectedChoice.isCorrect) {
+      setWrongAttemptsCount((prev) => prev + 1)
     }
 
     setTemporaryReaction(selectedChoice.reaction)
@@ -119,6 +131,7 @@ function App() {
             onSelectChoice={handleSelectChoice}
             showQuestionButton={Boolean(temporaryReaction)}
             onShowQuestion={() => setTemporaryReaction(null)}
+            errorPercent={errorPercent}
           />
         ) : (
           <StoryStepView step={currentStep} />
