@@ -13,11 +13,26 @@ from typing import *
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.logger import MISTRAL_LOGGER
-from common.paths import get_mistral_api_keys_fpath, get_secrets_dpath
+from common.paths import PathLike, get_mistral_api_keys_fpath, get_secrets_dpath
 from common.files import read_file
 
 logger = MISTRAL_LOGGER
 T = TypeVar("T")
+DEMO_MISTRAL_API_KEYS_FILENAMES: tuple[str, ...] = ("demo_keys", "demo_api_keys")
+
+
+def _resolve_api_keys_fpath() -> PathLike:
+    """Возвращает путь к файлу API-ключей с fallback на demo-файлы."""
+    primary_fpath = get_mistral_api_keys_fpath()
+    if primary_fpath.exists():
+        return primary_fpath
+
+    secrets_dpath = get_secrets_dpath()
+    for filename in DEMO_MISTRAL_API_KEYS_FILENAMES:
+        candidate_fpath = secrets_dpath / filename
+        if candidate_fpath.exists():
+            return candidate_fpath
+    return primary_fpath
 
 def _api_keys() -> list[str]:
     """Считывает API-ключи из файла.
@@ -25,17 +40,20 @@ def _api_keys() -> list[str]:
     Returns:
         Список API-ключей.
     """
-    api_keys_fpath = get_mistral_api_keys_fpath()
-    if not api_keys_fpath.exists():
-        demo_api_keys = get_secrets_dpath() / "demo_api_keys"
-        if demo_api_keys.exists():
-            api_keys_fpath = demo_api_keys
+    api_keys_fpath = _resolve_api_keys_fpath()
     try:
         api_keys: list[str] = read_file(api_keys_fpath)
     except FileNotFoundError:
         logger.warning(f"Файл с ключами Mistral не найден: {api_keys_fpath}")
         return []
-    return [key.strip() for key in api_keys if key.strip()]
+
+    normalized_keys: list[str] = []
+    for raw_key in api_keys:
+        # На Windows файлы иногда сохраняются с BOM в первой строке.
+        normalized_key: str = raw_key.strip().lstrip("\ufeff").strip()
+        if normalized_key:
+            normalized_keys.append(normalized_key)
+    return normalized_keys
 
 
 def _resolve_api_keys(config: MistralCallConfig) -> list[str]:

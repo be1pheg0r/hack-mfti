@@ -1,5 +1,8 @@
 from __future__ import annotations
+from pathlib import Path
 from typing import *
+
+import pytest
 
 from common import mistral
 
@@ -72,4 +75,28 @@ def test_call_mistral_next_call_starts_after_successful_fallback(monkeypatch) ->
 
     assert first == "ok:k2"
     assert second == "ok:k2"
+
+
+@pytest.mark.parametrize("demo_filename", ["demo_keys", "demo_api_keys"])
+def test_api_keys_reads_demo_file_when_primary_absent(tmp_path: Path, monkeypatch, demo_filename: str) -> None:
+    secrets_dpath: Path = tmp_path / ".credentials"
+    secrets_dpath.mkdir(parents=True, exist_ok=True)
+    demo_fpath: Path = secrets_dpath / demo_filename
+    demo_fpath.write_text("k_demo_1\n\n k_demo_2 \n", encoding="utf-8")
+
+    monkeypatch.setattr(mistral, "get_mistral_api_keys_fpath", lambda: secrets_dpath / "mistral_api_keys")
+    monkeypatch.setattr(mistral, "get_secrets_dpath", lambda: secrets_dpath)
+
+    assert mistral._api_keys() == ["k_demo_1", "k_demo_2"]
+
+
+def test_api_keys_returns_empty_when_no_files(tmp_path: Path, monkeypatch) -> None:
+    secrets_dpath: Path = tmp_path / ".credentials"
+    secrets_dpath.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mistral, "get_mistral_api_keys_fpath", lambda: secrets_dpath / "mistral_api_keys")
+    monkeypatch.setattr(mistral, "get_secrets_dpath", lambda: secrets_dpath)
+
+    assert mistral._api_keys() == []
+
 
