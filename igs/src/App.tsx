@@ -3,7 +3,7 @@ import './App.css'
 
 import blehGif from './assets/bleh.gif'
 import blueFaceGif from './assets/blue_face.gif'
-import hamsterGif from './assets/hamster.gif'
+// import hamsterGif from './assets/hamster.gif'
 
 import { ErrorModal, type ErrorModalScenario } from './components/ErrorModal'
 import { LESSON_STEPS } from './data/lessons'
