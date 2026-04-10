@@ -34,7 +34,7 @@
 
 ## Решение
 
-Сабмит в корне файл [`solution.csv`](solution.csv).
+Сабмит в корне файл [`knowledge_bench_private_scores.csv`](knowledge_bench_private_scores.csv).
 
 ## Установка и запуск
 
