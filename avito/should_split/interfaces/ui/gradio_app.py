@@ -15,19 +15,21 @@ from avito.constants import (
     GRADIO_DEFAULT_PORT,
 )
 from avito.should_split.api.client import PipelineApiClient
+from avito.should_split.core.config import ShouldSplitGraphConfig
 
 
-def build_predict_fn(api_url: str) -> Callable[[str], tuple[str, str, dict[str, Any]]]:
+def build_predict_fn(api_url: str, api_timeout_sec: int) -> Callable[[str], tuple[str, str, dict[str, Any]]]:
     """Создает функцию инференса для Gradio.
 
     Args:
         api_url: Базовый URL API сервиса should_split.
+        api_timeout_sec: Таймаут HTTP-запроса к API в секундах.
 
     Returns:
         Функция, принимающая описание объявления и возвращающая
         shouldSplit, список mcId и полный JSON-ответ.
     """
-    client = PipelineApiClient(base_url=api_url)
+    client = PipelineApiClient(base_url=api_url, timeout_sec=api_timeout_sec)
 
     def predict(description: str) -> tuple[str, str, dict[str, Any]]:
         if not description or not description.strip():
@@ -61,18 +63,31 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("API_URL", GRADIO_DEFAULT_API_URL),
         help="Base URL for inference API",
     )
+    parser.add_argument(
+        "--api-timeout-sec",
+        type=int,
+        default=None,
+        help="Timeout for one HTTP request to inference API (sec). If omitted, value from config is used.",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Optional path to should_split_graph.yaml",
+    )
     parser.add_argument("--share", action="store_true", help="Enable Gradio share link")
     args, _ = parser.parse_known_args()
     return args
 
 
-def build_interface(api_url: str) -> gr.Blocks:
+def build_interface(api_url: str, api_timeout_sec: int) -> gr.Blocks:
     """Создает Gradio интерфейс для ручной проверки пайплайна."""
-    predict = build_predict_fn(api_url=api_url)
+    predict = build_predict_fn(api_url=api_url, api_timeout_sec=api_timeout_sec)
 
     with gr.Blocks(title="Кейс от Авито. Команда: RnD Свердловской синагоги") as demo:
         gr.Markdown("# Кейс от Авито. Команда: RnD Свердловской синагоги")
         gr.Markdown(f"**API URL:** `{api_url}`")
+        gr.Markdown(f"**API timeout (sec):** `{api_timeout_sec}`")
 
         description = gr.Textbox(
             label="Описание объявления",
@@ -98,7 +113,14 @@ def main() -> None:
     args = parse_args()
     os.environ["API_URL"] = args.api_url
 
-    demo = build_interface(api_url=args.api_url)
+    runtime_config = ShouldSplitGraphConfig.model_validate({"config_path": args.config}) if args.config else ShouldSplitGraphConfig.from_default_yaml()
+    api_timeout_sec = (
+        args.api_timeout_sec
+        if args.api_timeout_sec is not None
+        else runtime_config.graph.pipeline_request_timeout_sec
+    )
+
+    demo = build_interface(api_url=args.api_url, api_timeout_sec=api_timeout_sec)
     demo.launch(server_name=args.host, server_port=args.port, share=args.share)
 
 

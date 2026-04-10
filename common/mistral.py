@@ -13,7 +13,7 @@ from typing import *
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from common.logger import MISTRAL_LOGGER
-from common.paths import get_mistral_api_keys_fpath
+from common.paths import get_mistral_api_keys_fpath, get_secrets_dpath
 from common.files import read_file
 
 logger = MISTRAL_LOGGER
@@ -26,6 +26,10 @@ def _api_keys() -> list[str]:
         Список API-ключей.
     """
     api_keys_fpath = get_mistral_api_keys_fpath()
+    if not api_keys_fpath.exists():
+        demo_api_keys = get_secrets_dpath() / "demo_api_keys"
+        if demo_api_keys.exists():
+            api_keys_fpath = demo_api_keys
     try:
         api_keys: list[str] = read_file(api_keys_fpath)
     except FileNotFoundError:
@@ -217,7 +221,8 @@ def call_mistral(config: MistralCallConfig, **kwargs: Any) -> str:
                     max_attempts=config.max_attempts_per_call,
                     **kwargs,
                 )
-                setattr(call_mistral, "current_key_index", key_index)
+                # После успешного вызова сдвигаем указатель на следующий ключ.
+                setattr(call_mistral, "current_key_index", (key_index + 1) % len(keys_to_try))
                 logger.info(f"call_mistral: успешный вызов модели {model_name}")
                 return result
             except Exception as error:

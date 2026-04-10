@@ -45,8 +45,9 @@ def test_pre_filter_and_stage_timing_are_saved() -> None:
     state = pipeline.clean_node(state)
     state = pipeline.pre_filter_node(state)
 
-    assert state.shouldSplit is True
-    assert state.multiCats is True
+    assert state.pre_filter_verdict is True
+    assert state.shouldSplit is False
+    assert state.multiCats is False
     assert pipeline.stages.clean in state.stage_durations_sec
     assert pipeline.stages.pre_filter in state.stage_durations_sec
     assert state.stage_durations_sec[pipeline.stages.clean] >= 0.0
@@ -60,7 +61,7 @@ def test_drafts_stub_writes_metadata() -> None:
     pipeline = _build_pipeline_stub(config)
 
     state = RunState(description="пример")
-    state = pipeline.drafts_node(state)
+    state = pipeline.draft_generate_node(state)
 
     assert state.metadata["drafts_status"] == "stub"
     assert state.drafts == []
@@ -73,7 +74,18 @@ def test_drafts_stub_can_raise_not_implemented() -> None:
     pipeline = _build_pipeline_stub(config)
 
     with pytest.raises(NotImplementedError):
-        pipeline.drafts_node(RunState(description="пример"))
+        pipeline.draft_generate_node(RunState(description="пример"))
+
+
+def test_draft_generate_skips_when_should_split_false() -> None:
+    config = ShouldSplitGraphConfig.model_validate({"graph": {"verbose": False}})
+    pipeline = _build_pipeline_stub(config)
+
+    state = RunState(description="пример", shouldSplit=False, categorized_mc_ids=[101])
+    state = pipeline.draft_generate_node(state)
+
+    assert state.metadata["drafts_status"] == "skipped_should_split_false"
+    assert state.drafts == []
 
 
 def test_drafts_generate_creates_texts() -> None:
@@ -92,7 +104,7 @@ def test_drafts_generate_creates_texts() -> None:
         shouldSplit=True,
         categorized_mc_ids=[101],
     )
-    state = pipeline.drafts_node(state)
+    state = pipeline.draft_generate_node(state)
 
     assert state.metadata["drafts_status"] == "generated"
     assert len(state.drafts) == 1
@@ -117,28 +129,46 @@ def test_categorize_node_parses_category_ids() -> None:
     assert pipeline.stages.categorize in state.stage_durations_sec
 
 
-def test_rag_router_uses_should_split_flag_for_categorize() -> None:
+def test_rag_router_routes_to_categorize_only_when_rag_verdict_true() -> None:
     config = ShouldSplitGraphConfig.model_validate(
         {"graph": {"verbose": False, "enable_categorization": True}}
     )
     pipeline = _build_pipeline_stub(config)
 
-    state = RunState(description="пример", shouldSplit=True)
+    state = RunState(description="пример", rag_split_verdict=True, shouldSplit=True)
     assert pipeline.rag_router(state) == pipeline.routes.to_categorize
 
-    state = RunState(description="пример", shouldSplit=False)
+    state = RunState(description="пример", rag_split_verdict=False, shouldSplit=False)
     assert pipeline.rag_router(state) == pipeline.routes.to_llm_exit
+    assert state.shouldSplit is False
 
 
-def test_pre_filter_router_skips_llm_when_prefilter_true() -> None:
+def test_rag_split_node_sets_should_split_true_when_llm_returns_true() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {
+            "mistral": {"enabled": True},
+            "graph": {"verbose": False, "use_rag": False},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: '{"shouldSplit": true}'
+
+    state = RunState(description="пример", pre_filter_verdict=True)
+    state = pipeline.rag_split_node(state)
+
+    assert state.rag_split_verdict is True
+    assert state.shouldSplit is True
+
+
+def test_pre_filter_router_routes_to_rag_only_when_prefilter_true() -> None:
     config = ShouldSplitGraphConfig.model_validate({"graph": {"verbose": False}})
     pipeline = _build_pipeline_stub(config)
 
     true_state = RunState(description="пример", pre_filter_verdict=True)
     false_state = RunState(description="пример", pre_filter_verdict=False)
 
-    assert pipeline.pre_filter_router(true_state) == pipeline.routes.to_categorize
-    assert pipeline.pre_filter_router(false_state) == pipeline.routes.to_rag
+    assert pipeline.pre_filter_router(true_state) == pipeline.routes.to_rag
+    assert pipeline.pre_filter_router(false_state) == pipeline.routes.to_llm_exit
 
 
 def test_should_split_node_uses_no_rag_prompt_mode() -> None:
@@ -158,7 +188,7 @@ def test_should_split_node_uses_no_rag_prompt_mode() -> None:
     state = pipeline.rag_split_node(state)
 
     assert state.rag_split_verdict is True
-    assert state.multiCats is True
+    assert state.multiCats is False
     assert state.metadata["should_split_prompt_mode"] == "no_rag"
 
 
@@ -182,7 +212,65 @@ def test_categorize_node_uses_no_rag_prompt_mode() -> None:
     assert state.metadata["categorization_prompt_mode"] == "no_rag"
 
 
-def test_rag_router_routes_to_categorize_when_multi_cats_true_even_if_should_split_false() -> None:
+def test_categorize_node_uses_cached_top_k_examples_from_state() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {
+            "mistral": {"enabled": True},
+            "graph": {"verbose": False, "use_rag": True},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    pipeline.mistral_caller = lambda *args, **kwargs: "101"
+    pipeline._get_balanced_top_k = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("retrieval не должен вызываться при заполненном state.top_k_examples")
+    )
+
+    state = RunState(
+        description="пример",
+        top_k_examples=[
+            RetrievedExample(text="a", shouldSplit=True, categories=["101"]),
+            RetrievedExample(text="b", shouldSplit=False, categories=[]),
+        ],
+    )
+    state = pipeline.categorize_node(state)
+
+    assert state.categorized_mc_ids == [101]
+    assert state.metadata["categorization_prompt_mode"] == "rag"
+
+
+def test_rag_split_then_categorize_reuses_cached_top_k_examples() -> None:
+    config = ShouldSplitGraphConfig.model_validate(
+        {
+            "mistral": {"enabled": True},
+            "graph": {"verbose": False, "use_rag": True},
+        }
+    )
+    pipeline = _build_pipeline_stub(config)
+    calls = {"count": 0}
+
+    def fake_retrieval(*args, **kwargs) -> list[RetrievedExample]:
+        calls["count"] += 1
+        return [
+            RetrievedExample(text="a", shouldSplit=True, categories=["101"]),
+            RetrievedExample(text="b", shouldSplit=False, categories=[]),
+        ]
+
+    responses = iter([
+        '{"shouldSplit": true}',
+        "101",
+    ])
+    pipeline.mistral_caller = lambda *args, **kwargs: next(responses)
+    pipeline._get_balanced_top_k = fake_retrieval
+
+    state = RunState(description="пример")
+    state = pipeline.rag_split_node(state)
+    state = pipeline.categorize_node(state)
+
+    assert calls["count"] == 1
+    assert state.categorized_mc_ids == [101]
+
+
+def test_rag_router_routes_to_llm_exit_when_rag_verdict_false() -> None:
     config = ShouldSplitGraphConfig.model_validate(
         {
             "mistral": {"enabled": True},
@@ -190,14 +278,14 @@ def test_rag_router_routes_to_categorize_when_multi_cats_true_even_if_should_spl
         }
     )
     pipeline = _build_pipeline_stub(config)
-    pipeline.mistral_caller = lambda *args, **kwargs: '{"shouldSplit": false, "multiCats": true}'
+    pipeline.mistral_caller = lambda *args, **kwargs: '{"shouldSplit": false}'
 
     state = RunState(description="пример")
     state = pipeline.rag_split_node(state)
 
     assert state.shouldSplit is False
-    assert state.multiCats is True
-    assert pipeline.rag_router(state) == pipeline.routes.to_categorize
+    assert state.multiCats is False
+    assert pipeline.rag_router(state) == pipeline.routes.to_llm_exit
 
 
 def test_resolve_rag_markup_fpath_uses_markup_filename_as_fallback() -> None:

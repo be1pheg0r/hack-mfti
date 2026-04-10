@@ -105,6 +105,8 @@ python -m avito.should_split.interfaces.cli.run_pipeline "Делаем ремо�
   и инференс через HTTP-клиент [`PipelineApiClient`](../avito/should_split/api/client.py)
   к уже запущенному серверу (скрипт сервер не поднимает).
 - Входной датасет поддерживается в форматах `.json` и `.csv`.
+- В `official-test` по умолчанию ошибки отдельных строк (включая timeout API) не прерывают весь проход:
+  строка попадает в output с полем `prediction_error`, а evaluate идет дальше.
 
 ### Запуск
 
@@ -136,6 +138,8 @@ python -m avito.should_split.interfaces.jobs.evaluate --official-test --dataset 
 - `--output` — путь для JSON с добавленным `prediction`
 - `--official-test` — режим official-датасета (`request/response`) через уже запущенный API
 - `--api-url` — базовый URL API-сервера для `--official-test`
+- `--api-timeout-sec` — timeout одного HTTP-запроса к API (сек)
+- `--fail-fast` — прерывать evaluate на первой ошибке строки в `official-test`
 
 ---
 

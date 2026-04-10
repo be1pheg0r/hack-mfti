@@ -13,7 +13,7 @@ class GraphNodeNames:
     rag_split: str = "rag_split"
     categorize: str = "categorize"
     llm_exit: str = "llm_exit"
-    drafts: str = "drafts"
+    draft_generate: str = "draft_generate"
     drafts_exit: str = "drafts_exit"
 
 
@@ -24,7 +24,7 @@ class GraphRouteNames:
     to_rag: str = "to_rag"
     to_pre_filter_exit: str = "to_pre_filter_exit"
     to_categorize: str = "to_categorize"
-    to_drafts: str = "to_drafts"
+    to_draft_generate: str = "to_draft_generate"
     to_llm_exit: str = "to_llm_exit"
 
 
@@ -36,7 +36,7 @@ class StageNames:
     pre_filter: str = "pre_filter"
     rag_split: str = "rag_split"
     categorize: str = "categorize"
-    drafts: str = "drafts"
+    draft_generate: str = "draft_generate"
     pre_filter_exit: str = "pre_filter_exit"
     llm_exit: str = "llm_exit"
     drafts_exit: str = "drafts_exit"

@@ -7,11 +7,11 @@ encoder:
   model_name: "sergeyzh/rubert-mini-frida"
 
 vector_db:
-  backend: "in_memory"
+  backend: "chroma"
   collection_name: "avito_descriptions"
   persist_dir: "avito/gitignore/chroma"
   search_k: 20
-  balanced_k: 6
+  balanced_k: 12
   persist: true
 
 mistral:
@@ -21,7 +21,7 @@ mistral:
   timeout: 240
   max_attempts_per_call: 1
   reasoning_effort: "hard"
-  temperature: 0.0
+  temperature: 0.5
 
 graph:
   verbose: true
@@ -29,9 +29,10 @@ graph:
   enable_categorization: true
   enable_drafts: true
   draft_stub_mode: "generate"
+  pipeline_request_timeout_sec: 120
 
 drafts:
   enabled: true
-  temperature: 0.1
+  temperature: 0.0
   reasoning_effort: "medium"
 

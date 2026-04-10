@@ -8,32 +8,40 @@ version = "0.1.0"
 description = "Avito case solution for IT Purple Hack 2026"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    "colorama",
-    "pyyaml",
-    "pydantic",
-    "numpy>=1.26.0",
-    "pandas",
-    "scikit-learn>=1.5.0",
-    "joblib",
-    "tqdm>=4.66.0",
-    "langgraph>=0.2.0",
-    "langchain-community>=0.3.0",
-    "langchain-huggingface>=0.1.0",
-    "chromadb>=0.5.0",
-    "torch>=2.3.0",
-    "transformers>=4.45.0",
-    "sentence-transformers>=3.0.0",
-    "accelerate>=0.34.0",
-    "fastapi>=0.115.0",
-    "uvicorn>=0.30.0",
-    "gradio",
-    "pytest",
-    "jupyter",
-    "matplotlib",
-    "seaborn",
-    "umap-learn",
-    "optuna>=4.0.0",
-    "mistralai",
+    "accelerate==1.13.0",
+    "chromadb==1.5.7",
+    "colorama==0.4.6",
+    "fastapi==0.135.3",
+    "joblib==1.5.3",
+    "langchain-community==0.4.1",
+    "langchain-huggingface==1.2.1",
+    "langgraph==1.1.6",
+    "mistralai==2.1.3",
+    "numpy==2.4.3",
+    "pandas==3.0.1",
+    "pydantic==2.12.5",
+    "PyYAML==6.0.3",
+    "scikit-learn==1.8.0",
+    "sentence-transformers==3.4.1",
+    "torch==2.11.0",
+    "tqdm==4.67.3",
+    "transformers==4.57.6",
+    "uvicorn==0.43.0",
+]
+
+[project.optional-dependencies]
+ui = [
+    "gradio==6.11.0",
+]
+dev = [
+    "pytest==9.0.2",
+]
+notebooks = [
+    "jupyter==1.1.1",
+    "matplotlib==3.10.8",
+    "optuna==4.8.0",
+    "seaborn==0.13.2",
+    "umap-learn==0.5.11",
 ]
 
 [tool.setuptools.packages.find]

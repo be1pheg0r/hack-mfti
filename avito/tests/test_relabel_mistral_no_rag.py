@@ -43,11 +43,11 @@ def test_relabel_dataset_preserves_signature_and_duplicates_targets(tmp_path: Pa
         system_prompt = kwargs["messages"][0]["content"]
         user_prompt = kwargs["messages"][1]["content"]
 
-        if '"multiCats": true/false' in system_prompt:
+        if '"shouldSplit": true/false' in system_prompt:
             return (
-                '{"shouldSplit": true, "multiCats": true}'
+                '{"shouldSplit": true}'
                 if "отдельно сантехнику" in user_prompt
-                else '{"shouldSplit": false, "multiCats": false}'
+                else '{"shouldSplit": false}'
             )
         return "102, 103"
 

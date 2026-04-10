@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -18,6 +19,7 @@ from avito.should_split.api.schemas import AvitoApiRequest, AvitoApiResponse
 from avito.should_split.api.service import build_api_response
 from avito.should_split.core.pipeline import ShouldSplitPipeline, build_default_pipeline
 from common.logger import AVITO_SHOULD_SPLIT_LOGGER as logger
+from common.logger import MISTRAL_LOGGER
 
 
 def _resolve_pipeline(pipeline: ShouldSplitPipeline | None) -> ShouldSplitPipeline:
@@ -30,9 +32,18 @@ def create_app(pipeline: ShouldSplitPipeline | None = None) -> FastAPI:
     """Создает FastAPI приложение для shouldSplit API."""
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        original_mistral_disabled = MISTRAL_LOGGER.disabled
+        original_mistral_level = MISTRAL_LOGGER.level
+        MISTRAL_LOGGER.disabled = True
+        MISTRAL_LOGGER.setLevel(logging.CRITICAL)
         app.state.pipeline = _resolve_pipeline(pipeline)
+        logger.info("[api] Mistral logger muted for server runtime")
         logger.info("[api] FastAPI server is ready")
-        yield
+        try:
+            yield
+        finally:
+            MISTRAL_LOGGER.disabled = original_mistral_disabled
+            MISTRAL_LOGGER.setLevel(original_mistral_level)
 
     app = FastAPI(title="Avito ShouldSplit API", version="1.0.0", lifespan=lifespan)
     app.state.pipeline = pipeline

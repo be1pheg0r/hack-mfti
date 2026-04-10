@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from avito.should_split.api.server import create_app
 from avito.should_split.core.pipeline import ShouldSplitPipeline
 from avito.should_split.domain.models import DraftCandidate
+from common.logger import MISTRAL_LOGGER
 
 
 class _StubResult(BaseModel):
@@ -91,6 +92,18 @@ def test_fastapi_infer_returns_categories_when_should_split_false() -> None:
     assert payload["shouldSplit"] is False
     assert payload["detectedMcIds"] == [101, 102]
     assert payload["drafts"] == []
+
+
+def test_fastapi_server_mutes_mistral_logger_during_lifespan() -> None:
+    original_disabled = MISTRAL_LOGGER.disabled
+    original_level = MISTRAL_LOGGER.level
+
+    app = create_app(pipeline=cast(ShouldSplitPipeline, _StubPipeline()))
+    with TestClient(app):
+        assert MISTRAL_LOGGER.disabled is True
+
+    assert MISTRAL_LOGGER.disabled == original_disabled
+    assert MISTRAL_LOGGER.level == original_level
 
 
 

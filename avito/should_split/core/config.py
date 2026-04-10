@@ -5,6 +5,7 @@ from typing import *
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from avito.constants import PIPELINE_API_CLIENT_DEFAULT_TIMEOUT_SEC
 from common.files import read_yaml
 from common.mistral import MistralCallConfig
 from common.paths import get_avito_configs_dpath, get_avito_gitignore_dpath
@@ -130,6 +131,7 @@ class GraphConfig(BaseModel):
         enable_categorization: Запускать ли categorize-узел после rag_split.
         enable_drafts: Переходить ли в draft-ветку при shouldSplit=True.
         draft_stub_mode: Режим заглушки для draft-узла.
+        pipeline_request_timeout_sec: Таймаут HTTP-запроса к pipeline API.
     """
 
     verbose: bool = True
@@ -137,6 +139,12 @@ class GraphConfig(BaseModel):
     enable_categorization: bool = True
     enable_drafts: bool = True
     draft_stub_mode: Literal["metadata_only", "raise", "generate"] = "generate"
+    pipeline_request_timeout_sec: int = PIPELINE_API_CLIENT_DEFAULT_TIMEOUT_SEC
+
+    @field_validator("pipeline_request_timeout_sec")
+    @classmethod
+    def validate_pipeline_request_timeout_sec(cls, value: int) -> int:
+        return _validate_positive_int(value, "pipeline_request_timeout_sec")
 
 
 class DraftGenerationConfig(BaseModel):
