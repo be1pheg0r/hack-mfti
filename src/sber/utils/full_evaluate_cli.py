@@ -3,14 +3,18 @@ from __future__ import annotations
 """Оценивает модель как evaluate.py, но фичи извлекаются on-the-fly."""
 
 import argparse
+import logging
 import math
+from contextlib import contextmanager
 from pathlib import Path
 from typing import *
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from tqdm.auto import tqdm
 
 from common.logger import SBER_EVALUATION_LOGGER as logger
+from common.logger import SBER_HOOKS_LOGGER
 from common.paths import PathLike, get_data_bench_dpath
 from src.servers.utils.tabular_pipeline_utils import (
     TabularPipelineRequest,
@@ -112,6 +116,17 @@ def _resolve_query_column_name(columns: Sequence[str], preferred_column: str | N
     raise ValueError("Во входном CSV должна быть колонка query или prompt")
 
 
+@contextmanager
+def _suppress_hooks_logs() -> Iterator[None]:
+    """Временно поднимает уровень hook-логгера, чтобы убрать INFO-шум."""
+    previous_level: int = SBER_HOOKS_LOGGER.level
+    SBER_HOOKS_LOGGER.setLevel(max(previous_level, logging.WARNING))
+    try:
+        yield
+    finally:
+        SBER_HOOKS_LOGGER.setLevel(previous_level)
+
+
 def run(config: FullEvaluateConfig) -> Path:
     """Скорит датасет с online feature extraction и сохраняет CSV/отчет."""
     input_path: Path = Path(config.input_csv)
@@ -140,15 +155,24 @@ def run(config: FullEvaluateConfig) -> Path:
         feature_config_path=config.feature_config_path,
         feature_batch_size=config.feature_batch_size,
     )
-    service: TabularPipelineService = TabularPipelineService(config=service_config)
 
-    response: dict[str, list[float] | list[int]] = service.predict(
-        TabularPipelineRequest(
-            queries=queries,
-            model_answers=model_answers,
-            threshold=config.threshold,
-        )
-    )
+    batch_size: int = max(int(config.feature_batch_size), 1)
+    total_batches: int = max(int(math.ceil(len(queries) / batch_size)), 1)
+    response: dict[str, list[Any]] = {}
+    with _suppress_hooks_logs():
+        service: TabularPipelineService = TabularPipelineService(config=service_config)
+        for batch_index in tqdm(range(total_batches), desc="Full evaluate", total=total_batches):
+            start: int = batch_index * batch_size
+            stop: int = min(start + batch_size, len(queries))
+            batch_response: dict[str, list[Any]] = service.predict(
+                TabularPipelineRequest(
+                    queries=queries[start:stop],
+                    model_answers=model_answers[start:stop],
+                    threshold=config.threshold,
+                )
+            )
+            for key, values in batch_response.items():
+                response.setdefault(key, []).extend(values)
 
     result: pd.DataFrame = dataframe.copy()
     if "query" not in result.columns:
@@ -162,7 +186,6 @@ def run(config: FullEvaluateConfig) -> Path:
     result["t_total_sec"] = [float(value) for value in response["t_total_sec"]]
     result["t_sample_sec"] = [float(value) for value in response["t_sample_sec"]]
 
-    total_batches: int = max(int(math.ceil(len(result) / max(config.feature_batch_size, 1))), 1)
     export_dataframe: pd.DataFrame = result.assign(t_sample_ms=result["t_sample_sec"] * 1000.0)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
