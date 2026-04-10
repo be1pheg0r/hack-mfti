@@ -95,6 +95,7 @@ python -m avito.should_split.interfaces.jobs.evaluate --dataset <dataset_fpath>
 
 Примечание: для [`evaluate.py`](avito/should_split/interfaces/jobs/evaluate.py) предполагается,
 что [`avito/should_split/api/server.py`](avito/should_split/api/server.py) уже запущен, так как инференс идет через API.
+Также стоит заметить, что пингануть Mistral с русского сервера не выйдет.
 
 ## API ключи
 

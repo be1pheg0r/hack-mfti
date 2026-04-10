@@ -106,4 +106,17 @@ def test_fastapi_server_mutes_mistral_logger_during_lifespan() -> None:
     assert MISTRAL_LOGGER.level == original_level
 
 
+def test_fastapi_server_keeps_mistral_logger_enabled_with_flag() -> None:
+    original_disabled = MISTRAL_LOGGER.disabled
+    original_level = MISTRAL_LOGGER.level
+
+    app = create_app(pipeline=cast(ShouldSplitPipeline, _StubPipeline()), enable_mistral_logs=True)
+    with TestClient(app):
+        assert MISTRAL_LOGGER.disabled is original_disabled
+        assert MISTRAL_LOGGER.level == original_level
+
+    assert MISTRAL_LOGGER.disabled == original_disabled
+    assert MISTRAL_LOGGER.level == original_level
+
+
 

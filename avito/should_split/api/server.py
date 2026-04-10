@@ -10,6 +10,7 @@ import uvicorn
 
 from avito.constants import (
     SHOULD_SPLIT_API_DEFAULT_HOST,
+    SHOULD_SPLIT_API_ENABLE_MISTRAL_LOGS_DEFAULT,
     SHOULD_SPLIT_API_DEFAULT_PORT,
     SHOULD_SPLIT_API_HEALTH_PATH,
     SHOULD_SPLIT_API_INFER_PATH,
@@ -28,16 +29,23 @@ def _resolve_pipeline(pipeline: ShouldSplitPipeline | None) -> ShouldSplitPipeli
     return build_default_pipeline()
 
 
-def create_app(pipeline: ShouldSplitPipeline | None = None) -> FastAPI:
+def create_app(
+    pipeline: ShouldSplitPipeline | None = None,
+    enable_mistral_logs: bool = SHOULD_SPLIT_API_ENABLE_MISTRAL_LOGS_DEFAULT,
+) -> FastAPI:
     """Создает FastAPI приложение для shouldSplit API."""
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         original_mistral_disabled = MISTRAL_LOGGER.disabled
         original_mistral_level = MISTRAL_LOGGER.level
-        MISTRAL_LOGGER.disabled = True
-        MISTRAL_LOGGER.setLevel(logging.CRITICAL)
+        if not enable_mistral_logs:
+            MISTRAL_LOGGER.disabled = True
+            MISTRAL_LOGGER.setLevel(logging.CRITICAL)
         app.state.pipeline = _resolve_pipeline(pipeline)
-        logger.info("[api] Mistral logger muted for server runtime")
+        if enable_mistral_logs:
+            logger.info("[api] Mistral logger is enabled for server runtime")
+        else:
+            logger.info("[api] Mistral logger muted for server runtime")
         logger.info("[api] FastAPI server is ready")
         try:
             yield
@@ -67,12 +75,15 @@ def create_app(pipeline: ShouldSplitPipeline | None = None) -> FastAPI:
     return app
 
 
-def run_server(host: str, port: int) -> None:
+def run_server(
+    host: str,
+    port: int,
+    enable_mistral_logs: bool = SHOULD_SPLIT_API_ENABLE_MISTRAL_LOGS_DEFAULT,
+) -> None:
     uvicorn.run(
-        "avito.should_split.api.server:create_app",
+        create_app(enable_mistral_logs=enable_mistral_logs),
         host=host,
         port=port,
-        factory=True,
     )
 
 
@@ -80,8 +91,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run shouldSplit FastAPI server")
     parser.add_argument("--host", type=str, default=SHOULD_SPLIT_API_DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=SHOULD_SPLIT_API_DEFAULT_PORT)
+    parser.add_argument(
+        "--enable-mistral-logs",
+        action=argparse.BooleanOptionalAction,
+        default=SHOULD_SPLIT_API_ENABLE_MISTRAL_LOGS_DEFAULT,
+    )
     args = parser.parse_args()
-    run_server(host=args.host, port=args.port)
+    run_server(host=args.host, port=args.port, enable_mistral_logs=args.enable_mistral_logs)
 
 
 if __name__ == "__main__":
