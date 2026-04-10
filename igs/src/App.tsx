@@ -22,7 +22,7 @@ const MODAL_CONTENT: Record<ErrorModalScenario, ModalContent> = {
   error: {
     title: 'Мирного пути не будет',
     paragraphs: [
-      'Ты много раз неправильно отвечал на вопросы. Поэтому мы должны удалить твой компьютер. К сожалению, это единственный способ, чтобы ты смог продолжить обучение и стать настоящим гением.',
+      'Ты много раз неправильно ответил на вопросы. Поэтому мы должны удалить твой компьютер. К сожалению, это единственный способ, чтобы ты смог продолжить обучение и стать настоящим гением.',
       'Ладно, это шутка. Просто сфокусируйся и попробуй снова. У тебя все получится!',
     ],
     imageSrc: blueFaceGif, // blueFaceGif hamsterGif
@@ -47,12 +47,9 @@ function App() {
 
   const currentStep = LESSON_STEPS[stepIndex]
   const progressPercent = ((stepIndex) / (LESSON_STEPS.length - 1)) * 100
-  const totalQuestionSteps = useMemo(
-    () => LESSON_STEPS.filter((step) => step.kind === 'question').length,
-    []
-  )
+  const maxWrongAttempts = 7
   const errorCount = wrongAttemptsCount
-  const errorPercent = totalQuestionSteps > 0 ? (errorCount / totalQuestionSteps) * 100 : 0
+  const errorPercent = maxWrongAttempts > 0 ? (errorCount / maxWrongAttempts) * 100 : 0
   const isLastStep = stepIndex === LESSON_STEPS.length - 1
   const activeModalContent = modalScenario ? MODAL_CONTENT[modalScenario] : null
 
@@ -121,7 +118,7 @@ function App() {
 
     if (!selectedChoice.isCorrect) {
       const nextWrongAttemptsCount = wrongAttemptsCount + 1
-      if (totalQuestionSteps > 0 && nextWrongAttemptsCount >= totalQuestionSteps) {
+      if (maxWrongAttempts > 0 && nextWrongAttemptsCount >= maxWrongAttempts) {
         setWrongAttemptsCount(0)
         setModalScenario('error')
       } else {
