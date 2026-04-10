@@ -1,5 +1,0 @@
-# common requirements
-
-colorama
-pyyaml
-pydantic
