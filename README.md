@@ -1,5 +1,8 @@
 # IT Purple Hack 2026 - Avito case solution | RnD Свердловской синагоги
 
+Это README.md, который лежит в main ветке вместе с rnc_test.csv;
+Полный сурс лежит в ветке case/avito.
+
 ## Обзор
 
 Для кейса Avito реализован пайплайн с LLM + RAG, где в качестве LLM используются модели Mistral (API).
@@ -55,7 +58,7 @@ START
 ```
 ## Решение
 
-[solution.csv](solution.csv) в корне проекта.
+[rnc_test.csv](rnc_test.csv) в корне проекта.
 
 ## Установка
 
